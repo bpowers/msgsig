@@ -4,3 +4,35 @@
 
 package msgsig
 
+import (
+	"bufio"
+	_ "embed"
+	"fmt"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+func must[T any](result T, err error) T {
+	if err != nil {
+		panic(err)
+	}
+	return result
+}
+
+var (
+	//go:embed testmessages/request.http
+	testRequestBytes string
+	//go:embed testmessages/response.http
+	testResponseBytes string
+
+	testRequest  = must(http.ReadRequest(bufio.NewReader(strings.NewReader(testRequestBytes))))
+	testResponse = must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+)
+
+func TestSig(t *testing.T) {
+	_ = t
+
+	fmt.Printf("request: %v", testRequest)
+	fmt.Printf("response: %v", testResponse)
+}
