@@ -7,10 +7,12 @@ package msgsig
 import (
 	"bufio"
 	_ "embed"
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func must[T any](result T, err error) T {
@@ -30,9 +32,49 @@ var (
 	testResponse = must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
 )
 
-func TestSig(t *testing.T) {
-	_ = t
+func timeFromUnix(unixSecs int64) func() time.Time {
+	return func() time.Time {
+		return time.Unix(unixSecs, 0)
+	}
+}
 
-	fmt.Printf("request: %v", testRequest)
-	fmt.Printf("response: %v", testResponse)
+const (
+	expectedMinimalSignatureRsaPssInput  = `sig1=();created=1618884475;keyid="test-key-rsa-pss";alg="rsa-pss-sha512"`
+	expectedMinimalSignatureRsaPss       = `sig1=:HWP69ZNiom9Obu1KIdqPPcu/C1a5ZUMBbqS/xwJECV8bhIQVmEAAAzz8LQPvtP1iFSxxluDO1KE9b8L+O64LEOvhwYdDctV5+E39Jy1eJiD7nYREBgxTpdUfzTO+Trath0vZdTylFlxK4H3l3s/cuFhnOCxmFYgEa+cw+StBRgY1JtafSFwNcZgLxVwialuH5VnqJS4JN8PHD91XLfkjMscTo4jmVMpFd3iLVe0hqVFl7MDt6TMkwIyVFnEZ7B/VIQofdShO+C/7MuupCSLVjQz5xA+Zs6Hw+W9ESD/6BuGs6LF1TcKLxW+5K+2zvDY/Cia34HNpRW5io7Iv9/b7iQ==:`
+	expectedTestSignatureHmacSha256Input = `sig1=("@authority" "date" "content-type");created=1618884475;keyid="test-shared-secret"`
+	expectedTestSignatureHmacSha256      = `sig1=:fN3AMNGbx0V/cIEKkZOvLOoC3InI+lM2+gTv22x3ia8=:`
+)
+
+func TestRsaPssSig(t *testing.T) {
+	alg, err := NewAsymmetricSigningAlgorithm(AlgorithmRsaPssSha512, testKeyRsaPssPrivate, testKeyRsaPssName)
+	require.NoError(t, err)
+	signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithNoCoveredComponents())
+	req := &http.Request{}
+	*req = *testRequest
+
+	err = signer.Sign(req)
+	require.NoError(t, err)
+
+	sigInput := req.Header.Get("signature-input")
+	sig := req.Header.Get("signature")
+
+	require.Equal(t, expectedMinimalSignatureRsaPssInput, sigInput)
+	require.Equal(t, expectedMinimalSignatureRsaPss, sig)
+}
+
+func TestHmacSha256Sig(t *testing.T) {
+	alg, err := NewHmacSha256SigningAlgorithm([]byte(testKeySharedSecret), testKeySharedSecretName)
+	require.NoError(t, err)
+	signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("@authority", "date", "content-type"), WithAlg(false))
+	req := &http.Request{}
+	*req = *testRequest
+
+	err = signer.Sign(req)
+	require.NoError(t, err)
+
+	sigInput := req.Header.Get("signature-input")
+	sig := req.Header.Get("signature")
+
+	require.Equal(t, expectedTestSignatureHmacSha256Input, sigInput)
+	require.Equal(t, expectedTestSignatureHmacSha256, sig)
 }

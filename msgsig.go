@@ -5,14 +5,19 @@
 package msgsig
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"hash"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -34,7 +39,8 @@ var (
 
 type SigningAlgorithm interface {
 	KeyId() string
-	Sign(input []byte) []byte
+	AlgName() AlgorithmName
+	Sign(input []byte) ([]byte, error)
 }
 
 func NewHmacSha256SigningAlgorithm(key []byte, keyId string) (SigningAlgorithm, error) {
@@ -60,8 +66,16 @@ func (s *hmacSigningAlgorithm) KeyId() string {
 	return s.keyId
 }
 
-func (s *hmacSigningAlgorithm) Sign(input []byte) []byte {
-	return nil
+func (s *hmacSigningAlgorithm) AlgName() AlgorithmName {
+	return s.algName
+}
+
+func (s *hmacSigningAlgorithm) Sign(input []byte) ([]byte, error) {
+	fmt.Printf("hmac signing: `%s`\n", string(input))
+	defer s.hmac.Reset()
+	s.hmac.Write(input)
+	digest := s.hmac.Sum(nil)
+	return []byte(base64.StdEncoding.EncodeToString(digest)), nil
 }
 
 func NewAsymmetricSigningAlgorithm(algName AlgorithmName, privKey crypto.Signer, keyId string) (SigningAlgorithm, error) {
@@ -76,6 +90,16 @@ func NewAsymmetricSigningAlgorithm(algName AlgorithmName, privKey crypto.Signer,
 			return nil, ErrorAlgorithmKeyMismatch
 		}
 		hashOpt = crypto.SHA512
+		if rsaKey, ok := privKey.(*rsa.PrivateKey); ok {
+			return &rsaPssSigningAlgorithm{
+				keyId:   keyId,
+				privKey: rsaKey,
+				hashOpt: hashOpt,
+				hash:    hashOpt.New(),
+			}, nil
+		} else {
+			return nil, ErrorAlgorithmKeyMismatch
+		}
 	case AlgorithmRsaV15Sha256:
 		if _, ok := privKey.(*rsa.PrivateKey); !ok {
 			return nil, ErrorAlgorithmKeyMismatch
@@ -110,8 +134,47 @@ func (s *asymmetricSigningAlgorithm) KeyId() string {
 	return s.keyId
 }
 
-func (s *asymmetricSigningAlgorithm) Sign([]byte) []byte {
-	return nil
+func (s *asymmetricSigningAlgorithm) AlgName() AlgorithmName {
+	return s.algName
+}
+
+func (s *asymmetricSigningAlgorithm) Sign(in []byte) ([]byte, error) {
+	defer s.hash.Reset()
+	s.hash.Write(in)
+	sum := s.hash.Sum(nil)
+
+	return []byte(base64.StdEncoding.EncodeToString(sum)), nil
+}
+
+type rsaPssSigningAlgorithm struct {
+	keyId   string
+	privKey *rsa.PrivateKey
+	hashOpt crypto.Hash
+	hash    hash.Hash
+}
+
+func (s *rsaPssSigningAlgorithm) KeyId() string {
+	return s.keyId
+}
+
+func (s *rsaPssSigningAlgorithm) AlgName() AlgorithmName {
+	return AlgorithmRsaPssSha512
+}
+
+func (s *rsaPssSigningAlgorithm) Sign(in []byte) ([]byte, error) {
+	fmt.Printf("signing: `%s`\n", string(in))
+	defer s.hash.Reset()
+	s.hash.Write(in)
+	digest := s.hash.Sum(nil)
+	sig, err := rsa.SignPSS(rand.Reader, s.privKey, s.hashOpt, digest, &rsa.PSSOptions{
+		SaltLength: 64,
+		Hash:       s.hashOpt,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return []byte(base64.StdEncoding.EncodeToString(sig)), nil
 }
 
 type SignerOption func(*signer)
@@ -142,8 +205,48 @@ func WithNoCoveredComponents() func(s *signer) {
 	}
 }
 
+func WithNonce(nonce bool) func(s *signer) {
+	return func(s *signer) {
+		s.hasNonce = nonce
+	}
+}
+
+func WithAlg(alg bool) func(s *signer) {
+	return func(s *signer) {
+		s.hasAlg = alg
+	}
+}
+
+func WithSigNamer(sigNamer func(req *http.Request) []byte) func(s *signer) {
+	return func(s *signer) {
+		s.sigNamer = sigNamer
+	}
+}
+
+func withTime(now func() time.Time) func(s *signer) {
+	return func(s *signer) {
+		s.now = now
+	}
+}
+
+func now() time.Time {
+	return time.Now()
+}
+
+var defaultSigName = []byte("sig1")
+
 func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
-	s := &signer{alg: alg, coverAllComponents: true}
+	s := &signer{
+		alg:                alg,
+		hasCreated:         true,
+		hasNonce:           true,
+		hasAlg:             true,
+		coverAllComponents: true,
+		sigNamer: func(r *http.Request) []byte {
+			return defaultSigName
+		},
+		now: now,
+	}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -153,13 +256,73 @@ func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
 type signer struct {
 	alg                SigningAlgorithm
 	hasCreated         bool
+	hasNonce           bool
+	hasAlg             bool
 	maxAge             *time.Duration
+	sigNamer           func(req *http.Request) []byte
 	coverAllComponents bool
 	coveredComponents  []string
+	now                func() time.Time
 }
 
 // Sign computes a signature over the covered components of the request and adds it to the request.
 func (s *signer) Sign(req *http.Request) error {
+	var sigInput, sigInputHeader bytes.Buffer
+	sigName := s.sigNamer(req)
+	sigInputHeader.WriteString("(")
+
+	if s.coverAllComponents {
+		panic("TODO")
+	} else {
+		for i, c := range s.coveredComponents {
+			if i > 0 {
+				sigInputHeader.WriteByte(' ')
+			}
+			sigInputHeader.WriteByte('"')
+			sigInputHeader.WriteString(c)
+			sigInputHeader.WriteByte('"')
+			sigInput.WriteByte('"')
+			sigInput.WriteString(c)
+			sigInput.WriteString(`": `)
+			if c == "@authority" {
+				sigInput.WriteString(req.Host)
+			} else {
+				sigInput.WriteString(req.Header.Get(c))
+			}
+			sigInput.WriteByte('\n')
+		}
+	}
+
+	sigInputHeader.WriteString(")")
+	if s.hasCreated {
+		var ibuf [32]byte
+		i := strconv.AppendInt(ibuf[0:0:32], s.now().Unix(), 10)
+		sigInputHeader.WriteString(";created=")
+		sigInputHeader.Write(i)
+	}
+
+	sigInputHeader.WriteString(`;keyid="`)
+	sigInputHeader.WriteString(s.alg.KeyId())
+	sigInputHeader.WriteByte('"')
+
+	if s.hasAlg {
+		sigInputHeader.WriteString(`;alg="`)
+		sigInputHeader.WriteString(string(s.alg.AlgName()))
+		sigInputHeader.WriteByte('"')
+	}
+
+	req.Header.Set("Signature-Input", string(sigName)+"="+sigInputHeader.String())
+
+	sigInput.WriteString(`"@signature-params": `)
+	sigInput.Write(sigInputHeader.Bytes())
+
+	rawSig, err := s.alg.Sign(sigInput.Bytes())
+	if err != nil {
+		return err
+	}
+	sig := append(append(append(sigName, '=', ':'), rawSig...), ':')
+	req.Header.Set("Signature", string(sig))
+
 	return nil
 }
 
