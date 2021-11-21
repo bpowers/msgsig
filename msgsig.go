@@ -277,15 +277,19 @@ type signer struct {
 }
 
 type sigOptions struct {
-	hasCreated bool
-	created    time.Time
-	hasNonce   bool
-	hasAlg     bool
-	hasMaxAge  bool
-	maxAge     time.Duration
+	created            time.Time
+	maxAge             time.Duration
+	coveredComponents  []string
+	keyId              string
+	algName            AlgorithmName
+	coverAllComponents bool
+	hasCreated         bool
+	hasNonce           bool
+	hasAlg             bool
+	hasMaxAge          bool
 }
 
-func (s *signer) buildInput(req *http.Request, sigInput, sigInputHeader *bytes.Buffer) error {
+func buildInput(s sigOptions, getComponent func(c string) string, sigInput, sigInputHeader *bytes.Buffer) error {
 	sigInputHeader.WriteString("(")
 
 	if s.coverAllComponents {
@@ -301,11 +305,7 @@ func (s *signer) buildInput(req *http.Request, sigInput, sigInputHeader *bytes.B
 			sigInput.WriteByte('"')
 			sigInput.WriteString(c)
 			sigInput.WriteString(`": `)
-			if c == "@authority" {
-				sigInput.WriteString(req.Host)
-			} else {
-				sigInput.WriteString(req.Header.Get(c))
-			}
+			sigInput.WriteString(getComponent(c))
 			sigInput.WriteByte('\n')
 		}
 	}
@@ -313,18 +313,18 @@ func (s *signer) buildInput(req *http.Request, sigInput, sigInputHeader *bytes.B
 	sigInputHeader.WriteString(")")
 	if s.hasCreated {
 		var ibuf [32]byte
-		i := strconv.AppendInt(ibuf[0:0:32], s.now().Unix(), 10)
+		i := strconv.AppendInt(ibuf[0:0:32], s.created.Unix(), 10)
 		sigInputHeader.WriteString(";created=")
 		sigInputHeader.Write(i)
 	}
 
 	sigInputHeader.WriteString(`;keyid="`)
-	sigInputHeader.WriteString(s.alg.KeyId())
+	sigInputHeader.WriteString(s.keyId)
 	sigInputHeader.WriteByte('"')
 
 	if s.hasAlg {
 		sigInputHeader.WriteString(`;alg="`)
-		sigInputHeader.WriteString(string(s.alg.AlgName()))
+		sigInputHeader.WriteString(string(s.algName))
 		sigInputHeader.WriteByte('"')
 	}
 
@@ -353,12 +353,34 @@ func (s *signer) Sign(req *http.Request) error {
 		s.b64BufferPool.Put(b64Buf)
 	}()
 
-	sigName := s.sigNamer(req)
+	opts := sigOptions{
+		coveredComponents:  s.coveredComponents,
+		coverAllComponents: s.coverAllComponents,
+		keyId:              s.alg.KeyId(),
+		algName:            s.alg.AlgName(),
+		hasCreated:         s.hasCreated,
+		hasAlg:             s.hasAlg,
+		hasNonce:           s.hasNonce,
+		hasMaxAge:          s.maxAge != nil,
+	}
+	if s.hasCreated {
+		opts.created = s.now()
+	}
+	if s.maxAge != nil {
+		opts.maxAge = *s.maxAge
+	}
 
-	if err := s.buildInput(req, sigInput, sigInputHeader); err != nil {
+	if err := buildInput(opts, func(c string) string {
+		if c == "@authority" {
+			return req.Host
+		} else {
+			return req.Header.Get(c)
+		}
+	}, sigInput, sigInputHeader); err != nil {
 		return err
 	}
 
+	sigName := s.sigNamer(req)
 	headerBuf.Write(sigName)
 	headerBuf.WriteByte('=')
 	headerBuf.Write(sigInputHeader.Bytes())

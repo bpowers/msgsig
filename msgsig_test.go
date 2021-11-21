@@ -80,6 +80,24 @@ func TestHmacSha256Sig(t *testing.T) {
 	require.Equal(t, expectedTestSignatureHmacSha256, sig)
 }
 
+func TestEcdsaP256Sha256Sig(t *testing.T) {
+	t.SkipNow()
+	alg, err := NewAsymmetricSigningAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Private, testKeyEccP256Name)
+	require.NoError(t, err)
+	signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("@authority", "date", "content-type"), WithAlg(false))
+	req := http.Request{}
+	req = *testRequest
+
+	err = signer.Sign(&req)
+	require.NoError(t, err)
+
+	sigInput := req.Header.Get("signature-input")
+	sig := req.Header.Get("signature")
+
+	require.Equal(t, expectedTestSignatureHmacSha256Input, sigInput)
+	require.Equal(t, expectedTestSignatureHmacSha256, sig)
+}
+
 func BenchmarkHmacSha256Sign(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
