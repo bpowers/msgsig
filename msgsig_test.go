@@ -39,10 +39,12 @@ func timeFromUnix(unixSecs int64) func() time.Time {
 }
 
 const (
-	expectedMinimalSignatureRsaPssInput  = `sig1=();created=1618884475;keyid="test-key-rsa-pss";alg="rsa-pss-sha512"`
-	expectedMinimalSignatureRsaPss       = `sig1=:HWP69ZNiom9Obu1KIdqPPcu/C1a5ZUMBbqS/xwJECV8bhIQVmEAAAzz8LQPvtP1iFSxxluDO1KE9b8L+O64LEOvhwYdDctV5+E39Jy1eJiD7nYREBgxTpdUfzTO+Trath0vZdTylFlxK4H3l3s/cuFhnOCxmFYgEa+cw+StBRgY1JtafSFwNcZgLxVwialuH5VnqJS4JN8PHD91XLfkjMscTo4jmVMpFd3iLVe0hqVFl7MDt6TMkwIyVFnEZ7B/VIQofdShO+C/7MuupCSLVjQz5xA+Zs6Hw+W9ESD/6BuGs6LF1TcKLxW+5K+2zvDY/Cia34HNpRW5io7Iv9/b7iQ==:`
-	expectedTestSignatureHmacSha256Input = `sig1=("@authority" "date" "content-type");created=1618884475;keyid="test-shared-secret"`
-	expectedTestSignatureHmacSha256      = `sig1=:fN3AMNGbx0V/cIEKkZOvLOoC3InI+lM2+gTv22x3ia8=:`
+	expectedMinimalSignatureRsaPssInput        = `sig1=();created=1618884475;keyid="test-key-rsa-pss";alg="rsa-pss-sha512"`
+	expectedMinimalSignatureRsaPss             = `sig1=:HWP69ZNiom9Obu1KIdqPPcu/C1a5ZUMBbqS/xwJECV8bhIQVmEAAAzz8LQPvtP1iFSxxluDO1KE9b8L+O64LEOvhwYdDctV5+E39Jy1eJiD7nYREBgxTpdUfzTO+Trath0vZdTylFlxK4H3l3s/cuFhnOCxmFYgEa+cw+StBRgY1JtafSFwNcZgLxVwialuH5VnqJS4JN8PHD91XLfkjMscTo4jmVMpFd3iLVe0hqVFl7MDt6TMkwIyVFnEZ7B/VIQofdShO+C/7MuupCSLVjQz5xA+Zs6Hw+W9ESD/6BuGs6LF1TcKLxW+5K+2zvDY/Cia34HNpRW5io7Iv9/b7iQ==:`
+	expectedTestSignatureHmacSha256Input       = `sig1=("@authority" "date" "content-type");created=1618884475;keyid="test-shared-secret"`
+	expectedTestSignatureHmacSha256            = `sig1=:fN3AMNGbx0V/cIEKkZOvLOoC3InI+lM2+gTv22x3ia8=:`
+	expectestTestSignatureEcdsaP256Sha256Input = `sig1=("content-type" "digest" "content-length");created=1618884475;keyid="test-key-ecc-p256"`
+	expectestTestSignatureEcdsaP256Sha256      = `sig1=:n8RKXkj0iseWDmC6PNSQ1GX2R9650v+lhbb6rTGoSrSSx18zmn6fPOtBx48/WffYLO0n1RHHf9scvNGAgGq52Q==:`
 )
 
 func TestRsaPssSig(t *testing.T) {
@@ -81,21 +83,20 @@ func TestHmacSha256Sig(t *testing.T) {
 }
 
 func TestEcdsaP256Sha256Sig(t *testing.T) {
-	t.SkipNow()
 	alg, err := NewAsymmetricSigningAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Private, testKeyEccP256Name)
 	require.NoError(t, err)
-	signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("@authority", "date", "content-type"), WithAlg(false))
-	req := http.Request{}
-	req = *testRequest
+	signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
+	resp := http.Response{}
+	resp = *testResponse
 
-	err = signer.Sign(&req)
+	err = signer.SignResponse(&resp)
 	require.NoError(t, err)
 
-	sigInput := req.Header.Get("signature-input")
-	sig := req.Header.Get("signature")
+	sigInput := resp.Header.Get("signature-input")
+	sig := resp.Header.Get("signature")
 
-	require.Equal(t, expectedTestSignatureHmacSha256Input, sigInput)
-	require.Equal(t, expectedTestSignatureHmacSha256, sig)
+	require.Equal(t, expectestTestSignatureEcdsaP256Sha256Input, sigInput)
+	require.NotEmpty(t, sig)
 }
 
 func BenchmarkHmacSha256Sign(b *testing.B) {

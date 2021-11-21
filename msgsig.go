@@ -144,7 +144,7 @@ func (s *asymmetricSigningAlgorithm) Sign(in []byte) ([]byte, error) {
 	s.hash.Write(in)
 	digest := s.hash.Sum(nil)
 
-	return digest, nil
+	return s.privKey.Sign(rand.Reader, digest, s.hashOpt)
 }
 
 type rsaPssSigningAlgorithm struct {
@@ -410,9 +410,76 @@ func (s *signer) Sign(req *http.Request) error {
 	return nil
 }
 
+// SignResponse computes a signature over the covered components of the response and adds it to the request.
+func (s *signer) SignResponse(req *http.Response) error {
+	sigInput := s.sigBufferPool.Get()
+	sigInputHeader := s.sigBufferPool.Get()
+	headerBuf := s.sigBufferPool.Get()
+	b64Buf := s.b64BufferPool.Get()
+	defer func() {
+		s.sigBufferPool.Put(sigInput)
+		s.sigBufferPool.Put(sigInputHeader)
+		s.sigBufferPool.Put(headerBuf)
+		s.b64BufferPool.Put(b64Buf)
+	}()
+
+	opts := sigOptions{
+		coveredComponents:  s.coveredComponents,
+		coverAllComponents: s.coverAllComponents,
+		keyId:              s.alg.KeyId(),
+		algName:            s.alg.AlgName(),
+		hasCreated:         s.hasCreated,
+		hasAlg:             s.hasAlg,
+		hasNonce:           s.hasNonce,
+		hasMaxAge:          s.maxAge != nil,
+	}
+	if s.hasCreated {
+		opts.created = s.now()
+	}
+	if s.maxAge != nil {
+		opts.maxAge = *s.maxAge
+	}
+
+	if err := buildInput(opts, func(c string) string {
+		return req.Header.Get(c)
+	}, sigInput, sigInputHeader); err != nil {
+		return err
+	}
+
+	sigName := []byte("sig1")
+	headerBuf.Write(sigName)
+	headerBuf.WriteByte('=')
+	headerBuf.Write(sigInputHeader.Bytes())
+
+	req.Header.Set("Signature-Input", headerBuf.String())
+
+	rawSig, err := s.alg.Sign(sigInput.Bytes())
+	if err != nil {
+		return err
+	}
+
+	headerBuf.Reset()
+	headerBuf.Write(sigName)
+	headerBuf.WriteString("=:")
+	// encode the signature bytes in base64 for the header
+	l := base64.StdEncoding.EncodedLen(len(rawSig))
+	if l > cap(*b64Buf) {
+		*b64Buf = make([]byte, 0, l)
+	}
+	b := (*b64Buf)[0:l]
+	base64.StdEncoding.Encode(b, rawSig)
+	headerBuf.Write(b)
+	headerBuf.WriteByte(':')
+
+	req.Header.Set("Signature", headerBuf.String())
+
+	return nil
+}
+
 // Signer objects sign HTTP requests.
 type Signer interface {
 	Sign(req *http.Request) error
+	SignResponse(resp *http.Response) error
 }
 
 type Verifier interface {
