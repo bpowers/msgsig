@@ -103,9 +103,13 @@ func BenchmarkHmacSha256Sign(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		alg, err := NewHmacSha256SigningAlgorithm([]byte(testKeySharedSecret), testKeySharedSecretName)
-		require.NoError(b, err)
+		if err != nil {
+			b.FailNow()
+		}
 		signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("@authority", "date", "content-type"), WithAlg(false))
-		require.NoError(b, err)
+		if err != nil {
+			b.FailNow()
+		}
 		testRequest := must(http.ReadRequest(bufio.NewReader(strings.NewReader(testRequestBytes))))
 		req := http.Request{}
 		for pb.Next() {
@@ -123,6 +127,42 @@ func BenchmarkHmacSha256Sign(b *testing.B) {
 				b.FailNow()
 			}
 			if expectedTestSignatureHmacSha256 != sig {
+				b.FailNow()
+			}
+		}
+	})
+}
+
+func BenchmarkEcdsaP256Sha256Sign(b *testing.B) {
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		alg, err := NewAsymmetricSigningAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Private, testKeyEccP256Name)
+		if err != nil {
+			b.FailNow()
+		}
+		signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
+		if err != nil {
+			b.FailNow()
+		}
+		testResponse := must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+
+		resp := http.Response{}
+
+		for pb.Next() {
+			resp = *testResponse
+
+			err = signer.SignResponse(&resp)
+			if err != nil {
+				b.FailNow()
+			}
+
+			sigInput := resp.Header.Get("signature-input")
+			sig := resp.Header.Get("signature")
+
+			if expectestTestSignatureEcdsaP256Sha256Input != sigInput {
+				b.FailNow()
+			}
+			if sig == "" {
 				b.FailNow()
 			}
 		}
