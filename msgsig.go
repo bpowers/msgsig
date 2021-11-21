@@ -71,7 +71,6 @@ func (s *hmacSigningAlgorithm) AlgName() AlgorithmName {
 }
 
 func (s *hmacSigningAlgorithm) Sign(input []byte) ([]byte, error) {
-	fmt.Printf("hmac signing: `%s`\n", string(input))
 	defer s.hmac.Reset()
 	s.hmac.Write(input)
 	digest := s.hmac.Sum(nil)
@@ -265,10 +264,16 @@ type signer struct {
 	now                func() time.Time
 }
 
-// Sign computes a signature over the covered components of the request and adds it to the request.
-func (s *signer) Sign(req *http.Request) error {
-	var sigInput, sigInputHeader bytes.Buffer
-	sigName := s.sigNamer(req)
+type sigOptions struct {
+	hasCreated bool
+	created    time.Time
+	hasNonce   bool
+	hasAlg     bool
+	hasMaxAge  bool
+	maxAge     time.Duration
+}
+
+func (s *signer) buildInput(req *http.Request, sigInput, sigInputHeader *bytes.Buffer) error {
 	sigInputHeader.WriteString("(")
 
 	if s.coverAllComponents {
@@ -311,10 +316,22 @@ func (s *signer) Sign(req *http.Request) error {
 		sigInputHeader.WriteByte('"')
 	}
 
-	req.Header.Set("Signature-Input", string(sigName)+"="+sigInputHeader.String())
-
 	sigInput.WriteString(`"@signature-params": `)
 	sigInput.Write(sigInputHeader.Bytes())
+
+	return nil
+}
+
+// Sign computes a signature over the covered components of the request and adds it to the request.
+func (s *signer) Sign(req *http.Request) error {
+	var sigInput, sigInputHeader bytes.Buffer
+	sigName := s.sigNamer(req)
+
+	if err := s.buildInput(req, &sigInput, &sigInputHeader); err != nil {
+		return err
+	}
+
+	req.Header.Set("Signature-Input", string(sigName)+"="+sigInputHeader.String())
 
 	rawSig, err := s.alg.Sign(sigInput.Bytes())
 	if err != nil {
@@ -329,4 +346,8 @@ func (s *signer) Sign(req *http.Request) error {
 // Signer objects sign HTTP requests.
 type Signer interface {
 	Sign(req *http.Request) error
+}
+
+type Verifier interface {
+	Verify(req *http.Request) error
 }
