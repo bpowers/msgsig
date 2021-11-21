@@ -81,13 +81,13 @@ func TestHmacSha256Sig(t *testing.T) {
 }
 
 func BenchmarkHmacSha256Sign(b *testing.B) {
-	alg, err := NewHmacSha256SigningAlgorithm([]byte(testKeySharedSecret), testKeySharedSecretName)
-	require.NoError(b, err)
-
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
+		alg, err := NewHmacSha256SigningAlgorithm([]byte(testKeySharedSecret), testKeySharedSecretName)
+		require.NoError(b, err)
 		signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("@authority", "date", "content-type"), WithAlg(false))
 		require.NoError(b, err)
+		testRequest := must(http.ReadRequest(bufio.NewReader(strings.NewReader(testRequestBytes))))
 		req := http.Request{}
 		for pb.Next() {
 			req = *testRequest

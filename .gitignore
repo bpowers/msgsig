@@ -1,2 +1,4 @@
 /.idea
 *~
+/msgsig.test
+/*.profile

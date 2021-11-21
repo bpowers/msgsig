@@ -20,6 +20,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bpowers/msgsig/safepool"
 )
 
 type AlgorithmName string
@@ -74,7 +76,7 @@ func (s *hmacSigningAlgorithm) Sign(input []byte) ([]byte, error) {
 	defer s.hmac.Reset()
 	s.hmac.Write(input)
 	digest := s.hmac.Sum(nil)
-	return []byte(base64.StdEncoding.EncodeToString(digest)), nil
+	return digest, nil
 }
 
 func NewAsymmetricSigningAlgorithm(algName AlgorithmName, privKey crypto.Signer, keyId string) (SigningAlgorithm, error) {
@@ -140,9 +142,9 @@ func (s *asymmetricSigningAlgorithm) AlgName() AlgorithmName {
 func (s *asymmetricSigningAlgorithm) Sign(in []byte) ([]byte, error) {
 	defer s.hash.Reset()
 	s.hash.Write(in)
-	sum := s.hash.Sum(nil)
+	digest := s.hash.Sum(nil)
 
-	return []byte(base64.StdEncoding.EncodeToString(sum)), nil
+	return digest, nil
 }
 
 type rsaPssSigningAlgorithm struct {
@@ -173,7 +175,7 @@ func (s *rsaPssSigningAlgorithm) Sign(in []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return []byte(base64.StdEncoding.EncodeToString(sig)), nil
+	return sig, nil
 }
 
 type SignerOption func(*signer)
@@ -245,6 +247,13 @@ func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
 			return defaultSigName
 		},
 		now: now,
+		sigBufferPool: safepool.NewBufferPool(func() *bytes.Buffer {
+			return bytes.NewBuffer(make([]byte, 0, 16*1024))
+		}),
+		b64BufferPool: safepool.NewPool(func() *[]byte {
+			b := make([]byte, 0, 256)
+			return &b
+		}),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -262,6 +271,9 @@ type signer struct {
 	coverAllComponents bool
 	coveredComponents  []string
 	now                func() time.Time
+
+	sigBufferPool *safepool.BufferPool
+	b64BufferPool *safepool.Pool[*[]byte]
 }
 
 type sigOptions struct {
@@ -322,23 +334,52 @@ func (s *signer) buildInput(req *http.Request, sigInput, sigInputHeader *bytes.B
 	return nil
 }
 
+func zero(in []byte) {
+	for i := 0; i < len(in); i++ {
+		in[i] = 0
+	}
+}
+
 // Sign computes a signature over the covered components of the request and adds it to the request.
 func (s *signer) Sign(req *http.Request) error {
-	var sigInput, sigInputHeader bytes.Buffer
+	sigInput := s.sigBufferPool.Get()
+	sigInputHeader := s.sigBufferPool.Get()
+	headerBuf := s.sigBufferPool.Get()
+	b64Buf := s.b64BufferPool.Get()
+	defer func() {
+		s.sigBufferPool.Put(sigInput)
+		s.sigBufferPool.Put(sigInputHeader)
+		s.sigBufferPool.Put(headerBuf)
+		s.b64BufferPool.Put(b64Buf)
+	}()
+
 	sigName := s.sigNamer(req)
 
-	if err := s.buildInput(req, &sigInput, &sigInputHeader); err != nil {
+	if err := s.buildInput(req, sigInput, sigInputHeader); err != nil {
 		return err
 	}
 
-	req.Header.Set("Signature-Input", string(sigName)+"="+sigInputHeader.String())
+	headerBuf.Write(sigName)
+	headerBuf.WriteByte('=')
+	headerBuf.Write(sigInputHeader.Bytes())
+
+	req.Header.Set("Signature-Input", headerBuf.String())
 
 	rawSig, err := s.alg.Sign(sigInput.Bytes())
 	if err != nil {
 		return err
 	}
-	sig := append(append(append(sigName, '=', ':'), rawSig...), ':')
-	req.Header.Set("Signature", string(sig))
+
+	headerBuf.Reset()
+	headerBuf.Write(sigName)
+	headerBuf.WriteString("=:")
+	l := base64.StdEncoding.EncodedLen(len(rawSig))
+	b := (*b64Buf)[0:l]
+	base64.StdEncoding.Encode(b, rawSig)
+	headerBuf.Write(b)
+	headerBuf.WriteByte(':')
+
+	req.Header.Set("Signature", headerBuf.String())
 
 	return nil
 }
