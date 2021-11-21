@@ -373,7 +373,11 @@ func (s *signer) Sign(req *http.Request) error {
 	headerBuf.Reset()
 	headerBuf.Write(sigName)
 	headerBuf.WriteString("=:")
+	// encode the signature bytes in base64 for the header
 	l := base64.StdEncoding.EncodedLen(len(rawSig))
+	if l > cap(*b64Buf) {
+		*b64Buf = make([]byte, 0, l)
+	}
 	b := (*b64Buf)[0:l]
 	base64.StdEncoding.Encode(b, rawSig)
 	headerBuf.Write(b)
