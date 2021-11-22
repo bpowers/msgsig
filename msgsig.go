@@ -45,6 +45,12 @@ type SigningAlgorithm interface {
 	Sign(input []byte) ([]byte, error)
 }
 
+type VerifyingAlgorithm interface {
+	KeyId() string
+	AlgName() AlgorithmName
+	Verify(input, sig []byte) (bool, error)
+}
+
 func NewHmacSha256SigningAlgorithm(key []byte, keyId string) (SigningAlgorithm, error) {
 	if keyId = strings.TrimSpace(keyId); keyId == "" {
 		return nil, ErrorEmptyKeyId
@@ -178,55 +184,94 @@ func (s *rsaPssSigningAlgorithm) Sign(in []byte) ([]byte, error) {
 	return sig, nil
 }
 
-type SignerOption func(*signer)
+func NewAsymmetricVerifyingAlgorithm(algName AlgorithmName, pubKey crypto.PublicKey, keyId string) (VerifyingAlgorithm, error) {
+	if keyId = strings.TrimSpace(keyId); keyId == "" {
+		return nil, ErrorEmptyKeyId
+	}
+
+	var hashOpt crypto.Hash
+	switch algName {
+	case AlgorithmEcdsaP256Sha256:
+		if _, ok := pubKey.(*ecdsa.PublicKey); !ok {
+			return nil, ErrorAlgorithmKeyMismatch
+		}
+		hashOpt = crypto.SHA256
+	default:
+		return nil, ErrorUnknownAlgorithm
+	}
+	return &asymmetricVerifyingAlgorithm{
+		algName: algName,
+		keyId:   keyId,
+		pubKey:  pubKey,
+		hashOpt: hashOpt,
+		hash:    hashOpt.New(),
+	}, nil
+}
+
+type asymmetricVerifyingAlgorithm struct {
+	algName AlgorithmName
+	keyId   string
+	pubKey  crypto.PublicKey
+	hashOpt crypto.Hash
+	hash    hash.Hash
+}
+
+func (v *asymmetricVerifyingAlgorithm) KeyId() string {
+	return v.keyId
+}
+
+func (v *asymmetricVerifyingAlgorithm) AlgName() AlgorithmName {
+	return v.algName
+}
+
+func (v *asymmetricVerifyingAlgorithm) Verify(input, sig []byte) (bool, error) {
+	return false, nil
+}
+
+type SignerOption func(options *sigOptions)
 
 // WithCreated ensures that signatures created by a Signer with this option set have a created signature parameter.
-func WithCreated(b bool) func(s *signer) {
-	return func(s *signer) {
+func WithCreated(b bool) func(s *sigOptions) {
+	return func(s *sigOptions) {
 		s.hasCreated = b
 	}
 }
 
-func WithMaxAge(duration time.Duration) func(s *signer) {
-	return func(s *signer) {
-		s.maxAge = &duration
+func WithMaxAge(duration time.Duration) func(s *sigOptions) {
+	return func(s *sigOptions) {
+		s.hasMaxAge = true
+		s.maxAge = duration
 	}
 }
 
-func WithCoveredComponents(components ...string) func(s *signer) {
-	return func(s *signer) {
+func WithCoveredComponents(components ...string) func(s *sigOptions) {
+	return func(s *sigOptions) {
 		s.coverAllComponents = false
 		s.coveredComponents = components
 	}
 }
 
-func WithNoCoveredComponents() func(s *signer) {
-	return func(s *signer) {
+func WithNoCoveredComponents() func(s *sigOptions) {
+	return func(s *sigOptions) {
 		s.coverAllComponents = false
 	}
 }
 
-func WithNonce(nonce bool) func(s *signer) {
-	return func(s *signer) {
+func WithNonce(nonce bool) func(s *sigOptions) {
+	return func(s *sigOptions) {
 		s.hasNonce = nonce
 	}
 }
 
-func WithAlg(alg bool) func(s *signer) {
-	return func(s *signer) {
+func WithAlg(alg bool) func(s *sigOptions) {
+	return func(s *sigOptions) {
 		s.hasAlg = alg
 	}
 }
 
-func WithSigNamer(sigNamer func(req *http.Request) []byte) func(s *signer) {
-	return func(s *signer) {
-		s.sigNamer = sigNamer
-	}
-}
-
-func withTime(now func() time.Time) func(s *signer) {
-	return func(s *signer) {
-		s.now = now
+func withTime(now func() time.Time) func(s *sigOptions) {
+	return func(s *sigOptions) {
+		s.created = now
 	}
 }
 
@@ -238,15 +283,19 @@ var defaultSigName = []byte("sig1")
 
 func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
 	s := &signer{
-		alg:                alg,
-		hasCreated:         true,
-		hasNonce:           true,
-		hasAlg:             true,
-		coverAllComponents: true,
+		alg: alg,
+		opts: sigOptions{
+			algName:            alg.AlgName(),
+			keyId:              alg.KeyId(),
+			hasCreated:         true,
+			created:            now,
+			hasNonce:           true,
+			hasAlg:             true,
+			coverAllComponents: true,
+		},
 		sigNamer: func(r *http.Request) []byte {
 			return defaultSigName
 		},
-		now: now,
 		sigBufferPool: safepool.NewBufferPool(func() *bytes.Buffer {
 			return bytes.NewBuffer(make([]byte, 0, 16*1024))
 		}),
@@ -256,28 +305,22 @@ func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
 		}),
 	}
 	for _, opt := range opts {
-		opt(s)
+		opt(&s.opts)
 	}
 	return s, nil
 }
 
 type signer struct {
-	alg                SigningAlgorithm
-	hasCreated         bool
-	hasNonce           bool
-	hasAlg             bool
-	maxAge             *time.Duration
-	sigNamer           func(req *http.Request) []byte
-	coverAllComponents bool
-	coveredComponents  []string
-	now                func() time.Time
+	alg      SigningAlgorithm
+	opts     sigOptions
+	sigNamer func(r *http.Request) []byte
 
 	sigBufferPool *safepool.BufferPool
 	b64BufferPool *safepool.Pool[*[]byte]
 }
 
 type sigOptions struct {
-	created            time.Time
+	created            func() time.Time
 	maxAge             time.Duration
 	coveredComponents  []string
 	keyId              string
@@ -313,7 +356,7 @@ func buildInput(s sigOptions, getComponent func(c string) string, sigInput, sigI
 	sigInputHeader.WriteString(")")
 	if s.hasCreated {
 		var ibuf [32]byte
-		i := strconv.AppendInt(ibuf[0:0:32], s.created.Unix(), 10)
+		i := strconv.AppendInt(ibuf[0:0:32], s.created().Unix(), 10)
 		sigInputHeader.WriteString(";created=")
 		sigInputHeader.Write(i)
 	}
@@ -353,24 +396,7 @@ func (s *signer) Sign(req *http.Request) error {
 		s.b64BufferPool.Put(b64Buf)
 	}()
 
-	opts := sigOptions{
-		coveredComponents:  s.coveredComponents,
-		coverAllComponents: s.coverAllComponents,
-		keyId:              s.alg.KeyId(),
-		algName:            s.alg.AlgName(),
-		hasCreated:         s.hasCreated,
-		hasAlg:             s.hasAlg,
-		hasNonce:           s.hasNonce,
-		hasMaxAge:          s.maxAge != nil,
-	}
-	if s.hasCreated {
-		opts.created = s.now()
-	}
-	if s.maxAge != nil {
-		opts.maxAge = *s.maxAge
-	}
-
-	if err := buildInput(opts, func(c string) string {
+	if err := buildInput(s.opts, func(c string) string {
 		if c == "@authority" {
 			return req.Host
 		} else {
@@ -423,30 +449,13 @@ func (s *signer) SignResponse(req *http.Response) error {
 		s.b64BufferPool.Put(b64Buf)
 	}()
 
-	opts := sigOptions{
-		coveredComponents:  s.coveredComponents,
-		coverAllComponents: s.coverAllComponents,
-		keyId:              s.alg.KeyId(),
-		algName:            s.alg.AlgName(),
-		hasCreated:         s.hasCreated,
-		hasAlg:             s.hasAlg,
-		hasNonce:           s.hasNonce,
-		hasMaxAge:          s.maxAge != nil,
-	}
-	if s.hasCreated {
-		opts.created = s.now()
-	}
-	if s.maxAge != nil {
-		opts.maxAge = *s.maxAge
-	}
-
-	if err := buildInput(opts, func(c string) string {
+	if err := buildInput(s.opts, func(c string) string {
 		return req.Header.Get(c)
 	}, sigInput, sigInputHeader); err != nil {
 		return err
 	}
 
-	sigName := []byte("sig1")
+	sigName := s.sigNamer(nil)
 	headerBuf.Write(sigName)
 	headerBuf.WriteByte('=')
 	headerBuf.Write(sigInputHeader.Bytes())

@@ -97,6 +97,10 @@ func TestEcdsaP256Sha256Sig(t *testing.T) {
 
 	require.Equal(t, expectestTestSignatureEcdsaP256Sha256Input, sigInput)
 	require.NotEmpty(t, sig)
+
+	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
+	_ = vAlg
+
 }
 
 func BenchmarkHmacSha256Sign(b *testing.B) {
