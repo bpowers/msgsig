@@ -6,6 +6,7 @@ package msgsig
 
 import (
 	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/hmac"
@@ -281,6 +282,42 @@ func now() time.Time {
 
 var defaultSigName = []byte("sig1")
 
+func NewVerifier(algFinder func(ctx context.Context, keyName string) (VerifyingAlgorithm, bool), opts ...SignerOption) (Verifier, error) {
+	return &verifier{
+		algFinder: algFinder,
+		opts: sigOptions{
+			hasCreated:         true,
+			created:            now,
+			hasNonce:           true,
+			hasAlg:             true,
+			coverAllComponents: true,
+		},
+		sigBufferPool: safepool.NewBufferPool(func() *bytes.Buffer {
+			return bytes.NewBuffer(make([]byte, 0, 16*1024))
+		}),
+		b64BufferPool: safepool.NewPool(func() *[]byte {
+			b := make([]byte, 0, 256)
+			return &b
+		}),
+	}, nil
+}
+
+type verifier struct {
+	algFinder func(ctx context.Context, keyName string) (VerifyingAlgorithm, bool)
+	opts      sigOptions
+
+	sigBufferPool *safepool.BufferPool
+	b64BufferPool *safepool.Pool[*[]byte]
+}
+
+func (v *verifier) Verify(req *http.Request) error {
+	return nil
+}
+
+func (v *verifier) VerifyResponse(resp *http.Response) error {
+	return nil
+}
+
 func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
 	s := &signer{
 		alg: alg,
@@ -293,7 +330,7 @@ func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
 			hasAlg:             true,
 			coverAllComponents: true,
 		},
-		sigNamer: func(r *http.Request) []byte {
+		sigNamer: func(r reqResp) []byte {
 			return defaultSigName
 		},
 		sigBufferPool: safepool.NewBufferPool(func() *bytes.Buffer {
@@ -313,7 +350,7 @@ func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
 type signer struct {
 	alg      SigningAlgorithm
 	opts     sigOptions
-	sigNamer func(r *http.Request) []byte
+	sigNamer func(r reqResp) []byte
 
 	sigBufferPool *safepool.BufferPool
 	b64BufferPool *safepool.Pool[*[]byte]
@@ -383,8 +420,32 @@ func zero(in []byte) {
 	}
 }
 
-// Sign computes a signature over the covered components of the request and adds it to the request.
-func (s *signer) Sign(req *http.Request) error {
+type httpRequest http.Request
+type httpResponse http.Response
+
+func (r *httpRequest) Headers() http.Header {
+	return r.Header
+}
+
+func (r *httpRequest) Authority() string {
+	return r.Host
+}
+
+func (r *httpResponse) Headers() http.Header {
+	return r.Header
+}
+
+func (r *httpResponse) Authority() string {
+	// TODO
+	return ""
+}
+
+type reqResp interface {
+	Authority() string
+	Headers() http.Header
+}
+
+func (s *signer) sign(req reqResp) error {
 	sigInput := s.sigBufferPool.Get()
 	sigInputHeader := s.sigBufferPool.Get()
 	headerBuf := s.sigBufferPool.Get()
@@ -398,9 +459,9 @@ func (s *signer) Sign(req *http.Request) error {
 
 	if err := buildInput(s.opts, func(c string) string {
 		if c == "@authority" {
-			return req.Host
+			return req.Authority()
 		} else {
-			return req.Header.Get(c)
+			return req.Headers().Get(c)
 		}
 	}, sigInput, sigInputHeader); err != nil {
 		return err
@@ -411,7 +472,7 @@ func (s *signer) Sign(req *http.Request) error {
 	headerBuf.WriteByte('=')
 	headerBuf.Write(sigInputHeader.Bytes())
 
-	req.Header.Set("Signature-Input", headerBuf.String())
+	req.Headers().Set("Signature-Input", headerBuf.String())
 
 	rawSig, err := s.alg.Sign(sigInput.Bytes())
 	if err != nil {
@@ -431,58 +492,19 @@ func (s *signer) Sign(req *http.Request) error {
 	headerBuf.Write(b)
 	headerBuf.WriteByte(':')
 
-	req.Header.Set("Signature", headerBuf.String())
+	req.Headers().Set("Signature", headerBuf.String())
 
 	return nil
 }
 
+// Sign computes a signature over the covered components of the request and adds it to the request.
+func (s *signer) Sign(req *http.Request) error {
+	return s.sign((*httpRequest)(req))
+}
+
 // SignResponse computes a signature over the covered components of the response and adds it to the request.
-func (s *signer) SignResponse(req *http.Response) error {
-	sigInput := s.sigBufferPool.Get()
-	sigInputHeader := s.sigBufferPool.Get()
-	headerBuf := s.sigBufferPool.Get()
-	b64Buf := s.b64BufferPool.Get()
-	defer func() {
-		s.sigBufferPool.Put(sigInput)
-		s.sigBufferPool.Put(sigInputHeader)
-		s.sigBufferPool.Put(headerBuf)
-		s.b64BufferPool.Put(b64Buf)
-	}()
-
-	if err := buildInput(s.opts, func(c string) string {
-		return req.Header.Get(c)
-	}, sigInput, sigInputHeader); err != nil {
-		return err
-	}
-
-	sigName := s.sigNamer(nil)
-	headerBuf.Write(sigName)
-	headerBuf.WriteByte('=')
-	headerBuf.Write(sigInputHeader.Bytes())
-
-	req.Header.Set("Signature-Input", headerBuf.String())
-
-	rawSig, err := s.alg.Sign(sigInput.Bytes())
-	if err != nil {
-		return err
-	}
-
-	headerBuf.Reset()
-	headerBuf.Write(sigName)
-	headerBuf.WriteString("=:")
-	// encode the signature bytes in base64 for the header
-	l := base64.StdEncoding.EncodedLen(len(rawSig))
-	if l > cap(*b64Buf) {
-		*b64Buf = make([]byte, 0, l)
-	}
-	b := (*b64Buf)[0:l]
-	base64.StdEncoding.Encode(b, rawSig)
-	headerBuf.Write(b)
-	headerBuf.WriteByte(':')
-
-	req.Header.Set("Signature", headerBuf.String())
-
-	return nil
+func (s *signer) SignResponse(resp *http.Response) error {
+	return s.sign((*httpResponse)(resp))
 }
 
 // Signer objects sign HTTP requests.
@@ -493,4 +515,5 @@ type Signer interface {
 
 type Verifier interface {
 	Verify(req *http.Request) error
+	VerifyResponse(resp *http.Response) error
 }
