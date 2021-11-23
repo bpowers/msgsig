@@ -6,6 +6,7 @@ package msgsig
 
 import (
 	"bufio"
+	"context"
 	_ "embed"
 	"net/http"
 	"strings"
@@ -36,6 +37,13 @@ func timeFromUnix(unixSecs int64) func() time.Time {
 	return func() time.Time {
 		return time.Unix(unixSecs, 0)
 	}
+}
+
+func TestIterateCoveredComponents(t *testing.T) {
+	in := `"@authority" "date" "content-type"`
+	components, ok := parseComponents(nil, in)
+	require.True(t, ok)
+	require.Equal(t, []string{"@authority", "date", "content-type"}, components)
 }
 
 const (
@@ -89,7 +97,7 @@ func TestEcdsaP256Sha256Sig(t *testing.T) {
 	resp := http.Response{}
 	resp = *testResponse
 
-	err = signer.SignResponse(&resp)
+	err = signer.SignResponse(context.Background(), &resp)
 	require.NoError(t, err)
 
 	sigInput := resp.Header.Get("signature-input")
@@ -101,6 +109,18 @@ func TestEcdsaP256Sha256Sig(t *testing.T) {
 	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
 	_ = vAlg
 
+	keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+		if keyId == testKeyEccP256Name {
+			return vAlg, true
+		}
+		return nil, false
+	}
+
+	verifier, err := NewVerifier(keyFinder, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"))
+	require.NoError(t, err)
+
+	err = verifier.VerifyResponse(context.Background(), &resp)
+	require.NoError(t, err)
 }
 
 func BenchmarkHmacSha256Sign(b *testing.B) {
@@ -116,6 +136,10 @@ func BenchmarkHmacSha256Sign(b *testing.B) {
 		}
 		testRequest := must(http.ReadRequest(bufio.NewReader(strings.NewReader(testRequestBytes))))
 		req := http.Request{}
+
+		b.ReportAllocs()
+		b.ResetTimer()
+
 		for pb.Next() {
 			req = *testRequest
 
@@ -144,18 +168,22 @@ func BenchmarkEcdsaP256Sha256Sign(b *testing.B) {
 		if err != nil {
 			b.FailNow()
 		}
-		signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
+		signer, err := NewSigner(alg, WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
 		if err != nil {
 			b.FailNow()
 		}
 		testResponse := must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
 
+		ctx := context.Background()
 		resp := http.Response{}
+
+		b.ReportAllocs()
+		b.ResetTimer()
 
 		for pb.Next() {
 			resp = *testResponse
 
-			err = signer.SignResponse(&resp)
+			err = signer.SignResponse(ctx, &resp)
 			if err != nil {
 				b.FailNow()
 			}

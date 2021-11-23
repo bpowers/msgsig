@@ -139,7 +139,7 @@ func decodeAndParse[T any](s string, decoder func(b []byte) (T, error)) T {
 func init() {
 	testKeyRsaPrivate = decodeAndParse(testKeyRsaPrivatePem, x509.ParsePKCS1PrivateKey)
 	testKeyRsaPublic = decodeAndParse(testKeyRsaPublicPem, x509.ParsePKCS1PublicKey)
-	testKeyRsaPssPrivate = decodeAndParse(testKeyRsaPssPrivatePem, x509.ParsePKCS8PrivateKey).(*rsa.PrivateKey)
+	// testKeyRsaPssPrivate = decodeAndParse(testKeyRsaPssPrivatePem, x509.ParsePKCS8PrivateKey).(*rsa.PrivateKey)
 	testKeyRsaPssPublic = decodeAndParse(testKeyRsaPssPublicPem, x509.ParsePKIXPublicKey).(*rsa.PublicKey)
 	testKeyEccP256Private = decodeAndParse(testKeyEccP256PrivatePem, x509.ParseECPrivateKey)
 	testKeyEccP256Public = decodeAndParse(testKeyEccP256PublicPem, x509.ParsePKIXPublicKey).(*ecdsa.PublicKey)
