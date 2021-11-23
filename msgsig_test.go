@@ -107,8 +107,7 @@ func TestEcdsaP256Sha256Sig(t *testing.T) {
 	require.NotEmpty(t, sig)
 
 	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
-	_ = vAlg
-
+	require.NoError(t, err)
 	keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
 		if keyId == testKeyEccP256Name {
 			return vAlg, true
@@ -168,7 +167,7 @@ func BenchmarkEcdsaP256Sha256Sign(b *testing.B) {
 		if err != nil {
 			b.FailNow()
 		}
-		signer, err := NewSigner(alg, WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
+		signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
 		if err != nil {
 			b.FailNow()
 		}
@@ -188,13 +187,60 @@ func BenchmarkEcdsaP256Sha256Sign(b *testing.B) {
 				b.FailNow()
 			}
 
-			sigInput := resp.Header.Get("signature-input")
-			sig := resp.Header.Get("signature")
+			sigInput := resp.Header.Get(SignatureInputHeaderName)
+			sig := resp.Header.Get(SignatureHeaderName)
 
 			if expectestTestSignatureEcdsaP256Sha256Input != sigInput {
 				b.FailNow()
 			}
 			if sig == "" {
+				b.FailNow()
+			}
+		}
+	})
+}
+
+func BenchmarkEcdsaP256Sha256Verify(b *testing.B) {
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		alg, err := NewAsymmetricSigningAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Private, testKeyEccP256Name)
+		if err != nil {
+			b.FailNow()
+		}
+		signer, err := NewSigner(alg, WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
+		if err != nil {
+			b.FailNow()
+		}
+		testResponse := must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+
+		ctx := context.Background()
+		err = signer.SignResponse(ctx, testResponse)
+		if err != nil {
+			b.FailNow()
+		}
+
+		resp := http.Response{}
+
+		vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
+		require.NoError(b, err)
+		keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+			if keyId == testKeyEccP256Name {
+				return vAlg, true
+			}
+			return nil, false
+		}
+
+		verifier, err := NewVerifier(keyFinder, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"))
+		require.NoError(b, err)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		for pb.Next() {
+			resp = *testResponse
+
+			err = verifier.VerifyResponse(context.Background(), &resp)
+			if err != nil {
 				b.FailNow()
 			}
 		}
