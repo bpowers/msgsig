@@ -9,14 +9,10 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
-	"crypto/hmac"
-	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"hash"
 	"net/http"
 	"strconv"
 	"strings"
@@ -50,40 +46,6 @@ type VerifyingAlgorithm interface {
 	KeyId() string
 	AlgName() AlgorithmName
 	Verify(input, sig []byte) (bool, error)
-}
-
-func NewHmacSha256SigningAlgorithm(key []byte, keyId string) (SigningAlgorithm, error) {
-	if keyId = strings.TrimSpace(keyId); keyId == "" {
-		return nil, ErrorEmptyKeyId
-	}
-	copiedKey := make([]byte, len(key))
-	copy(copiedKey, key)
-	return &hmacSigningAlgorithm{
-		algName: AlgorithmHmacSha256,
-		keyId:   keyId,
-		hmac:    hmac.New(sha256.New, copiedKey),
-	}, nil
-}
-
-type hmacSigningAlgorithm struct {
-	algName AlgorithmName
-	keyId   string
-	hmac    hash.Hash
-}
-
-func (s *hmacSigningAlgorithm) KeyId() string {
-	return s.keyId
-}
-
-func (s *hmacSigningAlgorithm) AlgName() AlgorithmName {
-	return s.algName
-}
-
-func (s *hmacSigningAlgorithm) Sign(input []byte) ([]byte, error) {
-	defer s.hmac.Reset()
-	s.hmac.Write(input)
-	digest := s.hmac.Sum(nil)
-	return digest, nil
 }
 
 func NewAsymmetricSigningAlgorithm(algName AlgorithmName, privKey crypto.Signer, keyId string) (SigningAlgorithm, error) {
@@ -130,61 +92,6 @@ func NewAsymmetricSigningAlgorithm(algName AlgorithmName, privKey crypto.Signer,
 	}, nil
 }
 
-type asymmetricSigningAlgorithm struct {
-	algName AlgorithmName
-	keyId   string
-	privKey crypto.Signer
-	hashOpt crypto.Hash
-	hash    hash.Hash
-}
-
-func (s *asymmetricSigningAlgorithm) KeyId() string {
-	return s.keyId
-}
-
-func (s *asymmetricSigningAlgorithm) AlgName() AlgorithmName {
-	return s.algName
-}
-
-func (s *asymmetricSigningAlgorithm) Sign(in []byte) ([]byte, error) {
-	defer s.hash.Reset()
-	s.hash.Write(in)
-	digest := s.hash.Sum(nil)
-
-	return s.privKey.Sign(rand.Reader, digest, s.hashOpt)
-}
-
-type rsaPssSigningAlgorithm struct {
-	keyId   string
-	privKey *rsa.PrivateKey
-	hashOpt crypto.Hash
-	hash    hash.Hash
-}
-
-func (s *rsaPssSigningAlgorithm) KeyId() string {
-	return s.keyId
-}
-
-func (s *rsaPssSigningAlgorithm) AlgName() AlgorithmName {
-	return AlgorithmRsaPssSha512
-}
-
-func (s *rsaPssSigningAlgorithm) Sign(in []byte) ([]byte, error) {
-	fmt.Printf("signing: `%s`\n", string(in))
-	defer s.hash.Reset()
-	s.hash.Write(in)
-	digest := s.hash.Sum(nil)
-	sig, err := rsa.SignPSS(rand.Reader, s.privKey, s.hashOpt, digest, &rsa.PSSOptions{
-		SaltLength: 64,
-		Hash:       s.hashOpt,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return sig, nil
-}
-
 func NewAsymmetricVerifyingAlgorithm(algName AlgorithmName, pubKey crypto.PublicKey, keyId string) (VerifyingAlgorithm, error) {
 	if keyId = strings.TrimSpace(keyId); keyId == "" {
 		return nil, ErrorEmptyKeyId
@@ -207,30 +114,6 @@ func NewAsymmetricVerifyingAlgorithm(algName AlgorithmName, pubKey crypto.Public
 		hashOpt: hashOpt,
 		hash:    hashOpt.New(),
 	}, nil
-}
-
-type asymmetricVerifyingAlgorithm struct {
-	algName AlgorithmName
-	keyId   string
-	pubKey  crypto.PublicKey
-	hashOpt crypto.Hash
-	hash    hash.Hash
-}
-
-func (v *asymmetricVerifyingAlgorithm) KeyId() string {
-	return v.keyId
-}
-
-func (v *asymmetricVerifyingAlgorithm) AlgName() AlgorithmName {
-	return v.algName
-}
-
-func (v *asymmetricVerifyingAlgorithm) Verify(in, sig []byte) (bool, error) {
-	defer v.hash.Reset()
-	v.hash.Write(in)
-	digest := v.hash.Sum(nil)
-
-	return ecdsa.VerifyASN1(v.pubKey.(*ecdsa.PublicKey), digest, sig), nil
 }
 
 type SignerOption func(options *sigOptions)
