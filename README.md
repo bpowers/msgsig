@@ -34,3 +34,16 @@ For the verifier, the `WithCoveredComponents` argument is the minimum set of HTT
 If the request/response's signature doesn't cover _at least_ those fields, verification will fail.
 
 Signers and verifiers are _not_ safe for use by multiple Goroutines.  Keep a `sync.Pool` of them, or protect them with a lock.
+
+## Performance
+
+There is more to optimize, but performance is good (10s of signs and verifies per _millisecond_) and largely gated by the cost of ECDSA operations:
+
+```go
+goos: darwin
+goarch: arm64
+pkg: github.com/bpowers/msgsig
+BenchmarkHmacSha256Sign        	 7625259	       791.4 ns/op	     256 B/op	       7 allocs/op
+BenchmarkEcdsaP256Sha256Sign   	  287788	     20686 ns/op	    3273 B/op	      49 allocs/op
+BenchmarkEcdsaP256Sha256Verify 	  105276	     56334 ns/op	    1353 B/op	      24 allocs/op
+```
