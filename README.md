@@ -43,7 +43,7 @@ There is more to optimize, but performance is good (10s of signs and verifies pe
 goos: darwin
 goarch: arm64
 pkg: github.com/bpowers/msgsig
-BenchmarkHmacSha256Sign        	 7625259	       791.4 ns/op	     256 B/op	       7 allocs/op
-BenchmarkEcdsaP256Sha256Sign   	  287788	     20686 ns/op	    3273 B/op	      49 allocs/op
-BenchmarkEcdsaP256Sha256Verify 	  105276	     56334 ns/op	    1353 B/op	      24 allocs/op
+BenchmarkHmacSha256Sign-10           	 4152666	       284.8 ns/op	     286 B/op	       7 allocs/op
+BenchmarkEcdsaP256Sha256Sign-10      	  182097	      6432 ns/op	    3496 B/op	      50 allocs/op
+BenchmarkEcdsaP256Sha256Verify-10    	  146014	      8265 ns/op	    1433 B/op	      24 allocs/op
 ```
