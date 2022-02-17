@@ -31,9 +31,10 @@ const (
 )
 
 var (
-	ErrorUnknownAlgorithm     = errors.New("algorithm name not in HTTP Signature Algorithms Registry")
-	ErrorAlgorithmKeyMismatch = errors.New("wrong private key type for specified algorithm")
-	ErrorEmptyKeyId           = errors.New("expected a non-empty key ID")
+	ErrorUnknownAlgorithm         = errors.New("algorithm name not in HTTP Signature Algorithms Registry")
+	ErrorAlgorithmKeyMismatch     = errors.New("wrong private key type for specified algorithm")
+	ErrorEmptyKeyId               = errors.New("expected a non-empty key ID")
+	ErrorDigestVerificationFailed = errors.New("digest verification failed")
 )
 
 type SigningAlgorithm interface {
@@ -236,6 +237,19 @@ func parseComponents(buf []string, in string) (components []string, ok bool) {
 	return components, true
 }
 
+func contains(slice []string, s string) bool {
+	for _, ss := range slice {
+		if ss == s {
+			return true
+		}
+	}
+	return false
+}
+
+func (v *verifier) verifyDigest(ctx context.Context, req reqResp) error {
+	return nil
+}
+
 func (v *verifier) verify(ctx context.Context, req reqResp) error {
 	sigInput := v.sigBufferPool.Get()
 	sigInputHeader := v.sigBufferPool.Get()
@@ -288,6 +302,12 @@ func (v *verifier) verify(ctx context.Context, req reqResp) error {
 			}
 			if coveredComponents, ok = parseComponents(coveredComponents, componentsStr); !ok {
 				return ErrorMalformedSigParams
+			}
+
+			if contains(coveredComponents, "Digest") {
+				if err := v.verifyDigest(ctx, req); err != nil {
+					return err
+				}
 			}
 
 			opts := v.opts
