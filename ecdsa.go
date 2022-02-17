@@ -9,9 +9,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"hash"
+	"math/big"
 )
 
-type asymmetricSigningAlgorithm struct {
+type rsaV15SigningAlgorithm struct {
 	algName AlgorithmName
 	keyId   string
 	privKey crypto.Signer
@@ -19,15 +20,15 @@ type asymmetricSigningAlgorithm struct {
 	hash    hash.Hash
 }
 
-func (s *asymmetricSigningAlgorithm) KeyId() string {
+func (s *rsaV15SigningAlgorithm) KeyId() string {
 	return s.keyId
 }
 
-func (s *asymmetricSigningAlgorithm) AlgName() AlgorithmName {
+func (s *rsaV15SigningAlgorithm) AlgName() AlgorithmName {
 	return s.algName
 }
 
-func (s *asymmetricSigningAlgorithm) Sign(in []byte) ([]byte, error) {
+func (s *rsaV15SigningAlgorithm) Sign(in []byte) ([]byte, error) {
 	defer s.hash.Reset()
 	s.hash.Write(in)
 	digest := s.hash.Sum(nil)
@@ -35,26 +36,83 @@ func (s *asymmetricSigningAlgorithm) Sign(in []byte) ([]byte, error) {
 	return s.privKey.Sign(rand.Reader, digest, s.hashOpt)
 }
 
-type asymmetricVerifyingAlgorithm struct {
+type ecdsaSigningAlgorithm struct {
 	algName AlgorithmName
 	keyId   string
-	pubKey  crypto.PublicKey
+	privKey *ecdsa.PrivateKey
 	hashOpt crypto.Hash
 	hash    hash.Hash
 }
 
-func (v *asymmetricVerifyingAlgorithm) KeyId() string {
+func (esa *ecdsaSigningAlgorithm) KeyId() string {
+	return esa.keyId
+}
+
+func (esa *ecdsaSigningAlgorithm) AlgName() AlgorithmName {
+	return esa.algName
+}
+
+func (esa *ecdsaSigningAlgorithm) Sign(in []byte) ([]byte, error) {
+	defer esa.hash.Reset()
+	esa.hash.Write(in)
+	digest := esa.hash.Sum(nil)
+
+	r, s, err := ecdsa.Sign(rand.Reader, esa.privKey, digest)
+	if err != nil {
+		return nil, err
+	}
+
+	sig := make([]byte, 64)
+	r.FillBytes(sig[:ecdsaIntLen])
+	s.FillBytes(sig[ecdsaIntLen:])
+
+	return sig, nil
+}
+
+type ecdsaVerifyingAlgorithm struct {
+	algName AlgorithmName
+	keyId   string
+	pubKey  *ecdsa.PublicKey
+	hashOpt crypto.Hash
+	hash    hash.Hash
+}
+
+const (
+	ecdsaIntLen = 32
+	ecdsaSigLen = ecdsaIntLen * 2
+)
+
+func parseSig(sig []byte) (r *big.Int, s *big.Int, err error) {
+	if len(sig) != ecdsaSigLen {
+		return nil, nil, ErrorInvalidSigLength
+	}
+
+	r = new(big.Int)
+	r.SetBytes(sig[:ecdsaIntLen])
+
+	s = new(big.Int)
+	s.SetBytes(sig[ecdsaIntLen:])
+
+	return r, s, nil
+}
+
+func (v *ecdsaVerifyingAlgorithm) KeyId() string {
 	return v.keyId
 }
 
-func (v *asymmetricVerifyingAlgorithm) AlgName() AlgorithmName {
+func (v *ecdsaVerifyingAlgorithm) AlgName() AlgorithmName {
 	return v.algName
 }
 
-func (v *asymmetricVerifyingAlgorithm) Verify(in, sig []byte) (bool, error) {
+func (v *ecdsaVerifyingAlgorithm) Verify(in, sig []byte) (bool, error) {
 	defer v.hash.Reset()
 	v.hash.Write(in)
 	digest := v.hash.Sum(nil)
 
-	return ecdsa.VerifyASN1(v.pubKey.(*ecdsa.PublicKey), digest, sig), nil
+	r, s, err := parseSig(sig)
+	if err != nil {
+		return false, err
+	}
+
+	return ecdsa.Verify(v.pubKey, digest, r, s), nil
 }

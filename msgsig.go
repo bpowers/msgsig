@@ -35,6 +35,7 @@ var (
 	ErrorAlgorithmKeyMismatch     = errors.New("wrong private key type for specified algorithm")
 	ErrorEmptyKeyId               = errors.New("expected a non-empty key ID")
 	ErrorDigestVerificationFailed = errors.New("digest verification failed")
+	ErrorInvalidSigLength         = errors.New("the base64-decoded signature has an unexpected length")
 )
 
 type SigningAlgorithm interface {
@@ -76,21 +77,28 @@ func NewAsymmetricSigningAlgorithm(algName AlgorithmName, privKey crypto.Signer,
 			return nil, ErrorAlgorithmKeyMismatch
 		}
 		hashOpt = crypto.SHA256
+		return &rsaV15SigningAlgorithm{
+			algName: algName,
+			keyId:   keyId,
+			privKey: privKey,
+			hashOpt: hashOpt,
+			hash:    hashOpt.New(),
+		}, nil
 	case AlgorithmEcdsaP256Sha256:
-		if _, ok := privKey.(*ecdsa.PrivateKey); !ok {
+		hashOpt = crypto.SHA256
+		if ecdsaPrivKey, ok := privKey.(*ecdsa.PrivateKey); ok {
+			return &ecdsaSigningAlgorithm{
+				algName: algName,
+				keyId:   keyId,
+				privKey: ecdsaPrivKey,
+				hashOpt: hashOpt,
+				hash:    hashOpt.New(),
+			}, nil
+		} else {
 			return nil, ErrorAlgorithmKeyMismatch
 		}
-		hashOpt = crypto.SHA256
-	default:
-		return nil, ErrorUnknownAlgorithm
 	}
-	return &asymmetricSigningAlgorithm{
-		algName: algName,
-		keyId:   keyId,
-		privKey: privKey,
-		hashOpt: hashOpt,
-		hash:    hashOpt.New(),
-	}, nil
+	return nil, ErrorUnknownAlgorithm
 }
 
 func NewAsymmetricVerifyingAlgorithm(algName AlgorithmName, pubKey crypto.PublicKey, keyId string) (VerifyingAlgorithm, error) {
@@ -101,20 +109,21 @@ func NewAsymmetricVerifyingAlgorithm(algName AlgorithmName, pubKey crypto.Public
 	var hashOpt crypto.Hash
 	switch algName {
 	case AlgorithmEcdsaP256Sha256:
-		if _, ok := pubKey.(*ecdsa.PublicKey); !ok {
+		hashOpt = crypto.SHA256
+		if ecdsaPubKey, ok := pubKey.(*ecdsa.PublicKey); ok {
+			return &ecdsaVerifyingAlgorithm{
+				algName: algName,
+				keyId:   keyId,
+				pubKey:  ecdsaPubKey,
+				hashOpt: hashOpt,
+				hash:    hashOpt.New(),
+			}, nil
+		} else {
 			return nil, ErrorAlgorithmKeyMismatch
 		}
-		hashOpt = crypto.SHA256
-	default:
-		return nil, ErrorUnknownAlgorithm
 	}
-	return &asymmetricVerifyingAlgorithm{
-		algName: algName,
-		keyId:   keyId,
-		pubKey:  pubKey,
-		hashOpt: hashOpt,
-		hash:    hashOpt.New(),
-	}, nil
+
+	return nil, ErrorUnknownAlgorithm
 }
 
 type SignerOption func(options *sigOptions)
@@ -246,6 +255,19 @@ func contains(slice []string, s string) bool {
 	return false
 }
 
+func getKeyId(params string) (keyId string, err error) {
+	const keyIdStart = `;keyid="`
+	if i := strings.Index(params, keyIdStart); i >= 0 {
+		i += len(keyIdStart)
+		if j := strings.Index(params[i:], `"`); j >= 0 {
+			keyId = params[i : i+j]
+		} else {
+			return "", ErrorMalformedSigParams
+		}
+	}
+	return
+}
+
 func (v *verifier) verifyDigest(ctx context.Context, req reqResp) error {
 	return nil
 }
@@ -267,6 +289,7 @@ func (v *verifier) verify(ctx context.Context, req reqResp) error {
 
 			sigId, params, found := strings.Cut(first, "=")
 			if !found {
+				// TODO: should we continue here?
 				return ErrorMalformedSigParams
 			}
 
@@ -277,15 +300,9 @@ func (v *verifier) verify(ctx context.Context, req reqResp) error {
 			}
 
 			// see if this is a key we know
-			const keyIdStart = `;keyid="`
-			var keyId string
-			if i := strings.Index(params, keyIdStart); i >= 0 {
-				i += len(keyIdStart)
-				if j := strings.Index(params[i:], `"`); j >= 0 {
-					keyId = params[i : i+j]
-				} else {
-					return ErrorMalformedSigParams
-				}
+			keyId, err := getKeyId(params)
+			if err != nil {
+				return err
 			}
 
 			alg, ok := v.algFinder(ctx, keyId)

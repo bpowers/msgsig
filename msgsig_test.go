@@ -100,11 +100,12 @@ func TestEcdsaP256Sha256Sig(t *testing.T) {
 	err = signer.SignResponse(context.Background(), &resp)
 	require.NoError(t, err)
 
-	sigInput := resp.Header.Get("signature-input")
-	sig := resp.Header.Get("signature")
+	sigInput := resp.Header.Get("Signature-Input")
+	sig := resp.Header.Get("Signature")
 
 	require.Equal(t, expectestTestSignatureEcdsaP256Sha256Input, sigInput)
 	require.NotEmpty(t, sig)
+	require.Equal(t, 1, len(resp.Header["Signature"]))
 
 	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
 	require.NoError(t, err)
@@ -118,6 +119,10 @@ func TestEcdsaP256Sha256Sig(t *testing.T) {
 	verifier, err := NewVerifier(keyFinder, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"))
 	require.NoError(t, err)
 
+	err = verifier.VerifyResponse(context.Background(), &resp)
+	require.NoError(t, err)
+
+	resp.Header["Signature"] = []string{expectestTestSignatureEcdsaP256Sha256}
 	err = verifier.VerifyResponse(context.Background(), &resp)
 	require.NoError(t, err)
 }
