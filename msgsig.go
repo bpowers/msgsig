@@ -290,7 +290,7 @@ func getCreated(params string) (created time.Time, hasCreated bool, err error) {
 	return time.Time{}, false, nil
 }
 
-func (v *verifier) verifyDigest(ctx context.Context, req reqResp, body io.Reader) (err error) {
+func verifyDigest(req reqResp, body io.Reader) (err error) {
 	for _, hdr := range req.Headers().Values(DigestHeaderName) {
 		var first, rest string
 		for first = hdr; first != ""; first = rest {
@@ -389,7 +389,7 @@ func (v *verifier) verify(ctx context.Context, req reqResp, body io.Reader) erro
 
 			// digest here has to be lowercase, rather than the HTTP 1.1 SnakeCase
 			if contains(coveredComponents, "digest") {
-				if err := v.verifyDigest(ctx, req, body); err != nil {
+				if err := verifyDigest(req, body); err != nil {
 					return err
 				}
 			}
