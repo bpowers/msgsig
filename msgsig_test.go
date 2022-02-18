@@ -6,8 +6,13 @@ package msgsig
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/base64"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -30,8 +35,12 @@ var (
 	testResponseBytes string
 
 	testRequest  = must(http.ReadRequest(bufio.NewReader(strings.NewReader(testRequestBytes))))
-	testResponse = must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+	testResponse = getResponse()
 )
+
+func getResponse() *http.Response {
+	return must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+}
 
 func timeFromUnix(unixSecs int64) func() time.Time {
 	return func() time.Time {
@@ -74,7 +83,7 @@ func TestRsaPssSig(t *testing.T) {
 }
 
 func TestHmacSha256Sig(t *testing.T) {
-	alg, err := NewHmacSha256SigningAlgorithm([]byte(testKeySharedSecret), testKeySharedSecretName)
+	alg, err := NewHmacSha256SigningAlgorithm(testKeySharedSecret, testKeySharedSecretName)
 	require.NoError(t, err)
 	signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("@authority", "date", "content-type"), WithAlg(false))
 	req := http.Request{}
@@ -90,12 +99,11 @@ func TestHmacSha256Sig(t *testing.T) {
 	require.Equal(t, expectedTestSignatureHmacSha256, sig)
 }
 
-func TestEcdsaP256Sha256Sig(t *testing.T) {
+func TestEcdsaP256Sha256SigSigning(t *testing.T) {
 	alg, err := NewAsymmetricSigningAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Private, testKeyEccP256Name)
 	require.NoError(t, err)
 	signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
-	resp := http.Response{}
-	resp = *testResponse
+	resp := *getResponse()
 
 	err = signer.SignResponse(context.Background(), &resp)
 	require.NoError(t, err)
@@ -121,8 +129,25 @@ func TestEcdsaP256Sha256Sig(t *testing.T) {
 
 	err = verifier.VerifyResponse(context.Background(), &resp)
 	require.NoError(t, err)
+}
 
+func TestEcdsaP256Sha256SigSpecCase(t *testing.T) {
+	resp := *getResponse()
+	resp.Header["Signature-Input"] = []string{expectestTestSignatureEcdsaP256Sha256Input}
 	resp.Header["Signature"] = []string{expectestTestSignatureEcdsaP256Sha256}
+
+	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
+	require.NoError(t, err)
+	keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+		if keyId == testKeyEccP256Name {
+			return vAlg, true
+		}
+		return nil, false
+	}
+
+	verifier, err := NewVerifier(keyFinder, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"))
+	require.NoError(t, err)
+
 	err = verifier.VerifyResponse(context.Background(), &resp)
 	require.NoError(t, err)
 }
@@ -217,6 +242,8 @@ func BenchmarkEcdsaP256Sha256Verify(b *testing.B) {
 			b.FailNow()
 		}
 		testResponse := must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+		testResponseBody, err := io.ReadAll(testResponse.Body)
+		require.NoError(b, err)
 
 		ctx := context.Background()
 		err = signer.SignResponse(ctx, testResponse)
@@ -243,9 +270,70 @@ func BenchmarkEcdsaP256Sha256Verify(b *testing.B) {
 
 		for pb.Next() {
 			resp = *testResponse
+			resp.Body = io.NopCloser(bytes.NewBuffer(testResponseBody))
 
 			err = verifier.VerifyResponse(context.Background(), &resp)
 			if err != nil {
+				b.FailNow()
+			}
+		}
+	})
+}
+
+func BenchmarkEcdsaP256Sha256VerifyLargeBody(b *testing.B) {
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		alg, err := NewAsymmetricSigningAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Private, testKeyEccP256Name)
+		if err != nil {
+			b.FailNow()
+		}
+		signer, err := NewSigner(alg, WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
+		if err != nil {
+			b.FailNow()
+		}
+		testResponse := must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+
+		// 128 MB body
+		testResponseBody := make([]byte, 128*1024*1024)
+		_, err = rand.Read(testResponseBody)
+		require.NoError(b, err)
+
+		digest := sha256.New()
+		digest.Write(testResponseBody)
+		digestHeaderVal := "sha-256=" + base64.StdEncoding.EncodeToString(digest.Sum(nil))
+		testResponse.Header["Digest"] = []string{digestHeaderVal}
+
+		ctx := context.Background()
+		err = signer.SignResponse(ctx, testResponse)
+		if err != nil {
+			require.NoError(b, err)
+			b.FailNow()
+		}
+
+		resp := http.Response{}
+
+		vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
+		require.NoError(b, err)
+		keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+			if keyId == testKeyEccP256Name {
+				return vAlg, true
+			}
+			return nil, false
+		}
+
+		verifier, err := NewVerifier(keyFinder, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"))
+		require.NoError(b, err)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		for pb.Next() {
+			resp = *testResponse
+			resp.Body = io.NopCloser(bytes.NewBuffer(testResponseBody))
+
+			err = verifier.VerifyResponse(context.Background(), &resp)
+			if err != nil {
+				require.NoError(b, err)
 				b.FailNow()
 			}
 		}
