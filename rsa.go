@@ -42,3 +42,27 @@ func (s *rsaPssSigningAlgorithm) Sign(in []byte) ([]byte, error) {
 
 	return sig, nil
 }
+
+type rsaV15SigningAlgorithm struct {
+	algName AlgorithmName
+	keyId   string
+	privKey crypto.Signer
+	hashOpt crypto.Hash
+	hash    hash.Hash
+}
+
+func (s *rsaV15SigningAlgorithm) KeyId() string {
+	return s.keyId
+}
+
+func (s *rsaV15SigningAlgorithm) AlgName() AlgorithmName {
+	return s.algName
+}
+
+func (s *rsaV15SigningAlgorithm) Sign(in []byte) ([]byte, error) {
+	defer s.hash.Reset()
+	s.hash.Write(in)
+	digest := s.hash.Sum(nil)
+
+	return s.privKey.Sign(rand.Reader, digest, s.hashOpt)
+}
