@@ -10,9 +10,12 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,11 +34,12 @@ const (
 )
 
 var (
-	ErrorUnknownAlgorithm         = errors.New("algorithm name not in HTTP Signature Algorithms Registry")
-	ErrorAlgorithmKeyMismatch     = errors.New("wrong private key type for specified algorithm")
-	ErrorEmptyKeyId               = errors.New("expected a non-empty key ID")
-	ErrorDigestVerificationFailed = errors.New("digest verification failed")
-	ErrorInvalidSigLength         = errors.New("the base64-decoded signature has an unexpected length")
+	ErrorUnknownAlgorithm           = errors.New("algorithm name not in HTTP Signature Algorithms Registry")
+	ErrorAlgorithmKeyMismatch       = errors.New("wrong private key type for specified algorithm")
+	ErrorEmptyKeyId                 = errors.New("expected a non-empty key ID")
+	ErrorDigestVerificationFailed   = errors.New("digest verification failed")
+	ErrorInvalidSigLength           = errors.New("the base64-decoded signature has an unexpected length")
+	ErrorUnsupportedDigestAlgorithm = errors.New("a digest header was found, but it didn't contain a digest in a supported algorithm")
 )
 
 type SigningAlgorithm interface {
@@ -215,6 +219,7 @@ type verifier struct {
 const (
 	SignatureInputHeaderName = "Signature-Input"
 	SignatureHeaderName      = "Signature"
+	DigestHeaderName         = "Digest"
 )
 
 var (
@@ -268,11 +273,72 @@ func getKeyId(params string) (keyId string, err error) {
 	return
 }
 
-func (v *verifier) verifyDigest(ctx context.Context, req reqResp) error {
-	return nil
+func getCreated(params string) (created time.Time, hasCreated bool, err error) {
+	const createdStart = `;created=`
+	if i := strings.Index(params, createdStart); i >= 0 {
+		createdStr := params[i+len(createdStart):]
+		if j := strings.IndexByte(createdStr, ';'); j >= 0 {
+			createdStr = createdStr[:j]
+		}
+		if createdUnix, err := strconv.ParseInt(createdStr, 10, 64); err == nil {
+			return time.Unix(createdUnix, 0), true, nil
+		} else {
+
+			return time.Time{}, false, ErrorMalformedSigParams
+		}
+	}
+	return time.Time{}, false, nil
 }
 
-func (v *verifier) verify(ctx context.Context, req reqResp) error {
+func (v *verifier) verifyDigest(ctx context.Context, req reqResp, body io.Reader) (err error) {
+	for _, hdr := range req.Headers().Values(DigestHeaderName) {
+		var first, rest string
+		for first = hdr; first != ""; first = rest {
+			first, rest, _ = strings.Cut(hdr, ",")
+
+			digestAlg, digestVal, found := strings.Cut(first, "=")
+			if !found {
+				continue
+			}
+
+			if !strings.EqualFold(digestAlg, "sha-256") {
+				err = ErrorUnsupportedDigestAlgorithm
+				continue
+			}
+
+			expectedDigest, err := base64.StdEncoding.DecodeString(digestVal)
+			if err != nil {
+				return ErrorMalformedSig
+			}
+
+			digest := sha256.New()
+			bytesRead, err := io.Copy(digest, body)
+			if err != nil {
+				return err
+			}
+
+			// TODO: should we compare this to content length?
+			_ = bytesRead
+
+			actualDigest := digest.Sum(nil)
+
+			if subtle.ConstantTimeCompare(actualDigest, expectedDigest) == 1 {
+				return nil
+			} else {
+				return ErrorDigestVerificationFailed
+			}
+		}
+
+	}
+
+	if err == nil {
+		err = ErrorDigestVerificationFailed
+	}
+
+	return err
+}
+
+func (v *verifier) verify(ctx context.Context, req reqResp, body io.Reader) error {
 	sigInput := v.sigBufferPool.Get()
 	sigInputHeader := v.sigBufferPool.Get()
 	coveredComponentsPtr := v.componentsBufferPool.Get()
@@ -321,8 +387,9 @@ func (v *verifier) verify(ctx context.Context, req reqResp) error {
 				return ErrorMalformedSigParams
 			}
 
-			if contains(coveredComponents, "Digest") {
-				if err := v.verifyDigest(ctx, req); err != nil {
+			// digest here has to be lowercase, rather than the HTTP 1.1 SnakeCase
+			if contains(coveredComponents, "digest") {
+				if err := v.verifyDigest(ctx, req, body); err != nil {
 					return err
 				}
 			}
@@ -331,24 +398,13 @@ func (v *verifier) verify(ctx context.Context, req reqResp) error {
 			opts.hasAlg = false
 			opts.coverAllComponents = false
 			opts.coveredComponents = coveredComponents
+			opts.keyId = keyId
+
 			var created time.Time
-			const createdStart = `;created=`
-			if i := strings.Index(params, createdStart); i >= 0 {
-				createdStr := params[i+len(createdStart):]
-				if j := strings.IndexByte(createdStr, ';'); j >= 0 {
-					createdStr = createdStr[:j]
-				}
-				if createdUnix, err := strconv.ParseInt(createdStr, 10, 64); err == nil {
-					created = time.Unix(createdUnix, 0)
-				} else {
-					return ErrorMalformedSigParams
-				}
-				opts.hasCreated = true
-			}
+			created, opts.hasCreated, err = getCreated(params)
 			opts.created = func() time.Time {
 				return created
 			}
-			opts.keyId = keyId
 
 			getComponent := func(c string) string {
 				if c == "@authority" {
@@ -391,11 +447,11 @@ func (v *verifier) verify(ctx context.Context, req reqResp) error {
 }
 
 func (v *verifier) Verify(req *http.Request) error {
-	return v.verify(req.Context(), (*httpRequest)(req))
+	return v.verify(req.Context(), (*httpRequest)(req), req.Body)
 }
 
 func (v *verifier) VerifyResponse(ctx context.Context, resp *http.Response) error {
-	return v.verify(ctx, (*httpResponse)(resp))
+	return v.verify(ctx, (*httpResponse)(resp), resp.Body)
 }
 
 func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
