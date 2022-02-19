@@ -6,6 +6,7 @@ package msgsig
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
@@ -107,19 +108,32 @@ const (
 	testKeyEccP256PublicPem = `-----BEGIN PUBLIC KEY-----
 MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEqIVYZVLCrPZHGHjP17CTW0/+D9Lf
 w0EkjqF7xB4FivAxzic30tMM4GF+hR6Dxh71Z50VGGdldkkDXZCnTNnoXQ==
------END PUBLIC KEY-----
-`
+-----END PUBLIC KEY-----`
 	testKeyEccP256PrivatePem = `-----BEGIN EC PRIVATE KEY-----
 MHcCAQEEIFKbhfNZfpDsW43+0+JjUr9K+bTeuxopu653+hBaXGA7oAoGCCqGSM49
 AwEHoUQDQgAEqIVYZVLCrPZHGHjP17CTW0/+D9Lfw0EkjqF7xB4FivAxzic30tMM
 4GF+hR6Dxh71Z50VGGdldkkDXZCnTNnoXQ==
------END EC PRIVATE KEY-----
-`
+-----END EC PRIVATE KEY-----`
 )
 
 var (
 	testKeyEccP256Private *ecdsa.PrivateKey
 	testKeyEccP256Public  *ecdsa.PublicKey
+)
+
+const (
+	testKeyEd25519Name      = "test-key-edd25519"
+	testKeyEd25519PublicPem = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAJrQLj5P/89iXES9+vFgrIy29clF9CC/oPPsw3c5D0bs=
+-----END PUBLIC KEY-----`
+	testKeyEd25519PrivatePem = `-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIJ+DYvh6SEqVTm50DFtMDoQikTmiCqirVv9mWG9qfSnF
+-----END PRIVATE KEY-----`
+)
+
+var (
+	testKeyEd25519Private *ed25519.PrivateKey
+	testKeyEd25519Public  *ed25519.PublicKey
 )
 
 const testKeySharedSecretName = "test-shared-secret"
@@ -143,6 +157,11 @@ func init() {
 	testKeyRsaPssPublic = decodeAndParse(testKeyRsaPssPublicPem, x509.ParsePKIXPublicKey).(*rsa.PublicKey)
 	testKeyEccP256Private = decodeAndParse(testKeyEccP256PrivatePem, x509.ParseECPrivateKey)
 	testKeyEccP256Public = decodeAndParse(testKeyEccP256PublicPem, x509.ParsePKIXPublicKey).(*ecdsa.PublicKey)
+
+	testKeyEd25519PrivateK := decodeAndParse(testKeyEd25519PrivatePem, x509.ParsePKCS8PrivateKey).(ed25519.PrivateKey)
+	testKeyEd25519Private = &testKeyEd25519PrivateK
+	testKeyEd25519PublicK := decodeAndParse(testKeyEd25519PublicPem, x509.ParsePKIXPublicKey).(ed25519.PublicKey)
+	testKeyEd25519Public = &testKeyEd25519PublicK
 
 	testDecryptionKeys = map[string]interface{}{
 		testKeyRsaName:          testKeyRsaPublic,
