@@ -122,7 +122,7 @@ var (
 )
 
 const (
-	testKeyEd25519Name      = "test-key-edd25519"
+	testKeyEd25519Name      = "test-key-ed25519"
 	testKeyEd25519PublicPem = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAJrQLj5P/89iXES9+vFgrIy29clF9CC/oPPsw3c5D0bs=
 -----END PUBLIC KEY-----`
@@ -132,8 +132,8 @@ MC4CAQAwBQYDK2VwBCIEIJ+DYvh6SEqVTm50DFtMDoQikTmiCqirVv9mWG9qfSnF
 )
 
 var (
-	testKeyEd25519Private *ed25519.PrivateKey
-	testKeyEd25519Public  *ed25519.PublicKey
+	testKeyEd25519Private ed25519.PrivateKey
+	testKeyEd25519Public  ed25519.PublicKey
 )
 
 const testKeySharedSecretName = "test-shared-secret"
@@ -158,15 +158,14 @@ func init() {
 	testKeyEccP256Private = decodeAndParse(testKeyEccP256PrivatePem, x509.ParseECPrivateKey)
 	testKeyEccP256Public = decodeAndParse(testKeyEccP256PublicPem, x509.ParsePKIXPublicKey).(*ecdsa.PublicKey)
 
-	testKeyEd25519PrivateK := decodeAndParse(testKeyEd25519PrivatePem, x509.ParsePKCS8PrivateKey).(ed25519.PrivateKey)
-	testKeyEd25519Private = &testKeyEd25519PrivateK
-	testKeyEd25519PublicK := decodeAndParse(testKeyEd25519PublicPem, x509.ParsePKIXPublicKey).(ed25519.PublicKey)
-	testKeyEd25519Public = &testKeyEd25519PublicK
+	testKeyEd25519Private = decodeAndParse(testKeyEd25519PrivatePem, x509.ParsePKCS8PrivateKey).(ed25519.PrivateKey)
+	testKeyEd25519Public = decodeAndParse(testKeyEd25519PublicPem, x509.ParsePKIXPublicKey).(ed25519.PublicKey)
 
 	testDecryptionKeys = map[string]interface{}{
 		testKeyRsaName:          testKeyRsaPublic,
 		testKeyRsaPssName:       testKeyRsaPssPublic,
 		testKeyEccP256Name:      testKeyEccP256Public,
+		testKeyEd25519Name:      testKeyEd25519Public,
 		testKeySharedSecretName: testKeySharedSecret,
 	}
 }

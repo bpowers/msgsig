@@ -34,12 +34,16 @@ var (
 	//go:embed testmessages/response.http
 	testResponseBytes string
 
-	testRequest  = must(http.ReadRequest(bufio.NewReader(strings.NewReader(testRequestBytes))))
+	testRequest  = getRequest()
 	testResponse = getResponse()
 )
 
 func getResponse() *http.Response {
 	return must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+}
+
+func getRequest() *http.Request {
+	return must(http.ReadRequest(bufio.NewReader(strings.NewReader(testRequestBytes))))
 }
 
 func timeFromUnix(unixSecs int64) func() time.Time {
@@ -56,12 +60,14 @@ func TestIterateCoveredComponents(t *testing.T) {
 }
 
 const (
-	expectedMinimalSignatureRsaPssInput        = `sig1=();created=1618884475;keyid="test-key-rsa-pss";alg="rsa-pss-sha512"`
-	expectedMinimalSignatureRsaPss             = `sig1=:HWP69ZNiom9Obu1KIdqPPcu/C1a5ZUMBbqS/xwJECV8bhIQVmEAAAzz8LQPvtP1iFSxxluDO1KE9b8L+O64LEOvhwYdDctV5+E39Jy1eJiD7nYREBgxTpdUfzTO+Trath0vZdTylFlxK4H3l3s/cuFhnOCxmFYgEa+cw+StBRgY1JtafSFwNcZgLxVwialuH5VnqJS4JN8PHD91XLfkjMscTo4jmVMpFd3iLVe0hqVFl7MDt6TMkwIyVFnEZ7B/VIQofdShO+C/7MuupCSLVjQz5xA+Zs6Hw+W9ESD/6BuGs6LF1TcKLxW+5K+2zvDY/Cia34HNpRW5io7Iv9/b7iQ==:`
-	expectedTestSignatureHmacSha256Input       = `sig1=("@authority" "date" "content-type");created=1618884475;keyid="test-shared-secret"`
-	expectedTestSignatureHmacSha256            = `sig1=:fN3AMNGbx0V/cIEKkZOvLOoC3InI+lM2+gTv22x3ia8=:`
-	expectestTestSignatureEcdsaP256Sha256Input = `sig1=("content-type" "digest" "content-length");created=1618884475;keyid="test-key-ecc-p256"`
-	expectestTestSignatureEcdsaP256Sha256      = `sig1=:n8RKXkj0iseWDmC6PNSQ1GX2R9650v+lhbb6rTGoSrSSx18zmn6fPOtBx48/WffYLO0n1RHHf9scvNGAgGq52Q==:`
+	expectedMinimalSignatureRsaPssInput       = `sig1=();created=1618884475;keyid="test-key-rsa-pss";alg="rsa-pss-sha512"`
+	expectedMinimalSignatureRsaPss            = `sig1=:HWP69ZNiom9Obu1KIdqPPcu/C1a5ZUMBbqS/xwJECV8bhIQVmEAAAzz8LQPvtP1iFSxxluDO1KE9b8L+O64LEOvhwYdDctV5+E39Jy1eJiD7nYREBgxTpdUfzTO+Trath0vZdTylFlxK4H3l3s/cuFhnOCxmFYgEa+cw+StBRgY1JtafSFwNcZgLxVwialuH5VnqJS4JN8PHD91XLfkjMscTo4jmVMpFd3iLVe0hqVFl7MDt6TMkwIyVFnEZ7B/VIQofdShO+C/7MuupCSLVjQz5xA+Zs6Hw+W9ESD/6BuGs6LF1TcKLxW+5K+2zvDY/Cia34HNpRW5io7Iv9/b7iQ==:`
+	expectedTestSignatureHmacSha256Input      = `sig1=("@authority" "date" "content-type");created=1618884475;keyid="test-shared-secret"`
+	expectedTestSignatureHmacSha256           = `sig1=:fN3AMNGbx0V/cIEKkZOvLOoC3InI+lM2+gTv22x3ia8=:`
+	expectedTestSignatureEcdsaP256Sha256Input = `sig1=("content-type" "digest" "content-length");created=1618884475;keyid="test-key-ecc-p256"`
+	expectedTestSignatureEcdsaP256Sha256      = `sig1=:n8RKXkj0iseWDmC6PNSQ1GX2R9650v+lhbb6rTGoSrSSx18zmn6fPOtBx48/WffYLO0n1RHHf9scvNGAgGq52Q==:`
+	expectedTestSignatureEd25519Input         = `sig-b26=("date" "@method" "@path" "@authority" "content-type" "content-length");created=1618884473;keyid="test-key-ed25519"`
+	expectedTestSignatureEd25519              = `sig-b26=:wqcAqbmYJ2ji2glfAMaRy4gruYYnx2nEFN2HN6jrnDnQCK1u02Gb04v9EDgwUPiu4A0w6vuQv5lIp5WPpBKRCw==:`
 )
 
 func TestRsaPssSig(t *testing.T) {
@@ -111,7 +117,7 @@ func TestEcdsaP256Sha256SigSigning(t *testing.T) {
 	sigInput := resp.Header.Get("Signature-Input")
 	sig := resp.Header.Get("Signature")
 
-	require.Equal(t, expectestTestSignatureEcdsaP256Sha256Input, sigInput)
+	require.Equal(t, expectedTestSignatureEcdsaP256Sha256Input, sigInput)
 	require.NotEmpty(t, sig)
 	require.Equal(t, 1, len(resp.Header["Signature"]))
 
@@ -133,8 +139,8 @@ func TestEcdsaP256Sha256SigSigning(t *testing.T) {
 
 func TestEcdsaP256Sha256SigSpecCase(t *testing.T) {
 	resp := *getResponse()
-	resp.Header["Signature-Input"] = []string{expectestTestSignatureEcdsaP256Sha256Input}
-	resp.Header["Signature"] = []string{expectestTestSignatureEcdsaP256Sha256}
+	resp.Header["Signature-Input"] = []string{expectedTestSignatureEcdsaP256Sha256Input}
+	resp.Header["Signature"] = []string{expectedTestSignatureEcdsaP256Sha256}
 
 	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
 	require.NoError(t, err)
@@ -149,6 +155,70 @@ func TestEcdsaP256Sha256SigSpecCase(t *testing.T) {
 	require.NoError(t, err)
 
 	err = verifier.VerifyResponse(context.Background(), &resp)
+	require.NoError(t, err)
+}
+
+func TestEd25519SigSigning(t *testing.T) {
+	req := getRequest()
+
+	alg, err := NewAsymmetricSigningAlgorithm(AlgorithmEd25519, testKeyEd25519Private, testKeyEd25519Name)
+	require.NoError(t, err)
+	signer, err := NewSigner(alg,
+		withTime(timeFromUnix(1618884473)),
+		WithNonce(false),
+		WithCoveredComponents("date", "@method", "@path", "@authority", "content-type", "content-length"),
+		WithAlg(false),
+		WithSigNamer(func() string { return "sig-b26" }),
+	)
+
+	err = signer.Sign(req)
+	require.NoError(t, err)
+
+	sigInput := req.Header.Get("Signature-Input")
+	sig := req.Header.Get("Signature")
+
+	require.Equal(t, expectedTestSignatureEd25519Input, sigInput)
+	require.NotEmpty(t, sig)
+	require.Equal(t, 1, len(req.Header["Signature"]))
+
+	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEd25519, testKeyEd25519Public, testKeyEd25519Name)
+	require.NoError(t, err)
+	keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+		if keyId == testKeyEd25519Name {
+			return vAlg, true
+		}
+		return nil, false
+	}
+
+	verifier, err := NewVerifier(keyFinder,
+		withTime(timeFromUnix(1618884473)),
+		WithNonce(false),
+		WithCoveredComponents("date", "@method", "@path", "@authority", "content-type", "content-length"),
+	)
+	require.NoError(t, err)
+
+	err = verifier.Verify(req)
+	require.NoError(t, err)
+}
+
+func TestEd25519SigSpecCase(t *testing.T) {
+	req := getRequest()
+	req.Header["Signature-Input"] = []string{expectedTestSignatureEd25519Input}
+	req.Header["Signature"] = []string{expectedTestSignatureEd25519}
+
+	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEd25519, testKeyEd25519Public, testKeyEd25519Name)
+	require.NoError(t, err)
+	keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+		if keyId == testKeyEd25519Name {
+			return vAlg, true
+		}
+		return nil, false
+	}
+
+	verifier, err := NewVerifier(keyFinder, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"))
+	require.NoError(t, err)
+
+	err = verifier.Verify(req)
 	require.NoError(t, err)
 }
 
@@ -201,7 +271,7 @@ func BenchmarkEcdsaP256Sha256Sign(b *testing.B) {
 		if err != nil {
 			b.FailNow()
 		}
-		testResponse := must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+		testResponse := getResponse()
 
 		ctx := context.Background()
 		resp := http.Response{}
@@ -220,7 +290,7 @@ func BenchmarkEcdsaP256Sha256Sign(b *testing.B) {
 			sigInput := resp.Header.Get(SignatureInputHeaderName)
 			sig := resp.Header.Get(SignatureHeaderName)
 
-			if expectestTestSignatureEcdsaP256Sha256Input != sigInput {
+			if expectedTestSignatureEcdsaP256Sha256Input != sigInput {
 				b.FailNow()
 			}
 			if sig == "" {
@@ -241,7 +311,7 @@ func BenchmarkEcdsaP256Sha256Verify(b *testing.B) {
 		if err != nil {
 			b.FailNow()
 		}
-		testResponse := must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+		testResponse := getResponse()
 		testResponseBody, err := io.ReadAll(testResponse.Body)
 		require.NoError(b, err)
 
@@ -291,7 +361,7 @@ func BenchmarkEcdsaP256Sha256VerifyLargeBody(b *testing.B) {
 		if err != nil {
 			b.FailNow()
 		}
-		testResponse := must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+		testResponse := getResponse()
 
 		// 128 MB body
 		testResponseBody := make([]byte, 128*1024*1024)

@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -17,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +33,7 @@ const (
 	AlgorithmRsaV15Sha256    AlgorithmName = "rsa-v1_5-sha256"
 	AlgorithmEcdsaP256Sha256 AlgorithmName = "ecdsa-p256-sha256"
 	AlgorithmHmacSha256      AlgorithmName = "hmac-sha256"
+	AlgorithmEd25519         AlgorithmName = "ed25519"
 )
 
 var (
@@ -101,6 +104,14 @@ func NewAsymmetricSigningAlgorithm(algName AlgorithmName, privKey crypto.Signer,
 		} else {
 			return nil, ErrorAlgorithmKeyMismatch
 		}
+	case AlgorithmEd25519:
+		if ed25519PrivKey, ok := privKey.(ed25519.PrivateKey); ok {
+			return &ed25519SigningAlgorithm{
+				algName: algName,
+				keyId:   keyId,
+				privKey: ed25519PrivKey,
+			}, nil
+		}
 	}
 	return nil, ErrorUnknownAlgorithm
 }
@@ -125,12 +136,28 @@ func NewAsymmetricVerifyingAlgorithm(algName AlgorithmName, pubKey crypto.Public
 		} else {
 			return nil, ErrorAlgorithmKeyMismatch
 		}
+	case AlgorithmEd25519:
+		if ed25519PubKey, ok := pubKey.(ed25519.PublicKey); ok {
+			return &ed25519VerifyingAlgorithm{
+				algName: algName,
+				keyId:   keyId,
+				pubKey:  ed25519PubKey,
+			}, nil
+		}
 	}
 
 	return nil, ErrorUnknownAlgorithm
 }
 
 type SignerOption func(options *sigOptions)
+
+func WithSigNamer(namer func() string) func(s *sigOptions) {
+	return func(s *sigOptions) {
+		s.sigNamer = func(_ reqResp) []byte {
+			return []byte(namer())
+		}
+	}
+}
 
 // WithCreated ensures that signatures created by a Signer with this option set have a created signature parameter.
 func WithCreated(b bool) func(s *sigOptions) {
@@ -406,14 +433,9 @@ func (v *verifier) verify(ctx context.Context, req reqResp, body io.Reader) erro
 				return created
 			}
 
-			getComponent := func(c string) string {
-				if c == "@authority" {
-					return req.Authority()
-				} else {
-					return req.Headers().Get(c)
-				}
-			}
-			if err := buildInput(opts, getComponent, sigInput, sigInputHeader); err != nil {
+			if err := buildInput(opts, func(c string) string {
+				return getComponent(req, c)
+			}, sigInput, sigInputHeader); err != nil {
 				return err
 			}
 
@@ -465,9 +487,9 @@ func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
 			hasNonce:           true,
 			hasAlg:             true,
 			coverAllComponents: true,
-		},
-		sigNamer: func(r reqResp) []byte {
-			return defaultSigName
+			sigNamer: func(r reqResp) []byte {
+				return defaultSigName
+			},
 		},
 		sigBufferPool: safepool.NewBufferPool(func() *bytes.Buffer {
 			return bytes.NewBuffer(make([]byte, 0, 16*1024))
@@ -484,9 +506,8 @@ func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
 }
 
 type signer struct {
-	alg      SigningAlgorithm
-	opts     sigOptions
-	sigNamer func(r reqResp) []byte
+	alg  SigningAlgorithm
+	opts sigOptions
 
 	sigBufferPool *safepool.BufferPool
 	b64BufferPool *safepool.Pool[*[]byte]
@@ -503,6 +524,7 @@ type sigOptions struct {
 	hasNonce           bool
 	hasAlg             bool
 	hasMaxAge          bool
+	sigNamer           func(r reqResp) []byte
 }
 
 func buildInput(s sigOptions, getComponent func(c string) string, sigInput, sigInputHeader *bytes.Buffer) error {
@@ -567,8 +589,20 @@ func (r *httpRequest) Authority() string {
 	return r.Host
 }
 
+func (r *httpRequest) GetURL() *url.URL {
+	return r.URL
+}
+
+func (r *httpRequest) GetMethod() string {
+	return r.Method
+}
+
 func (r *httpResponse) Headers() http.Header {
 	return r.Header
+}
+
+func (r *httpResponse) GetURL() *url.URL {
+	return nil
 }
 
 func (r *httpResponse) Authority() string {
@@ -576,9 +610,32 @@ func (r *httpResponse) Authority() string {
 	return ""
 }
 
+func (r *httpResponse) GetMethod() string {
+	// TODO
+	return ""
+}
+
 type reqResp interface {
 	Authority() string
 	Headers() http.Header
+	GetURL() *url.URL
+	GetMethod() string
+}
+
+func getComponent(r reqResp, c string) string {
+	switch c {
+	case "@authority":
+		return r.Authority()
+	case "@path":
+		if url := r.GetURL(); url != nil {
+			return url.Path
+		}
+	case "@method":
+		return r.GetMethod()
+	default:
+		return r.Headers().Get(c)
+	}
+	return ""
 }
 
 func (s *signer) sign(ctx context.Context, req reqResp) error {
@@ -594,16 +651,12 @@ func (s *signer) sign(ctx context.Context, req reqResp) error {
 	}()
 
 	if err := buildInput(s.opts, func(c string) string {
-		if c == "@authority" {
-			return req.Authority()
-		} else {
-			return req.Headers().Get(c)
-		}
+		return getComponent(req, c)
 	}, sigInput, sigInputHeader); err != nil {
 		return err
 	}
 
-	sigName := s.sigNamer(req)
+	sigName := s.opts.sigNamer(req)
 	headerBuf.Write(sigName)
 	headerBuf.WriteByte('=')
 	headerBuf.Write(sigInputHeader.Bytes())
