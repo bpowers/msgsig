@@ -409,3 +409,53 @@ func BenchmarkEcdsaP256Sha256VerifyLargeBody(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkEd25519Verify(b *testing.B) {
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		alg, err := NewAsymmetricSigningAlgorithm(AlgorithmEd25519, testKeyEd25519Private, testKeyEd25519Name)
+		if err != nil {
+			b.FailNow()
+		}
+		signer, err := NewSigner(alg, WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
+		if err != nil {
+			b.FailNow()
+		}
+		testResponse := getResponse()
+		testResponseBody, err := io.ReadAll(testResponse.Body)
+		require.NoError(b, err)
+
+		ctx := context.Background()
+		err = signer.SignResponse(ctx, testResponse)
+		if err != nil {
+			b.FailNow()
+		}
+
+		resp := http.Response{}
+
+		vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEd25519, testKeyEd25519Public, testKeyEd25519Name)
+		require.NoError(b, err)
+		keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+			if keyId == testKeyEd25519Name {
+				return vAlg, true
+			}
+			return nil, false
+		}
+
+		verifier, err := NewVerifier(keyFinder, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"))
+		require.NoError(b, err)
+
+		b.ReportAllocs()
+		b.ResetTimer()
+
+		for pb.Next() {
+			resp = *testResponse
+			resp.Body = io.NopCloser(bytes.NewBuffer(testResponseBody))
+
+			err = verifier.VerifyResponse(context.Background(), &resp)
+			if err != nil {
+				b.FailNow()
+			}
+		}
+	})
+}
