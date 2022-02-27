@@ -21,13 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func must[T any](result T, err error) T {
-	if err != nil {
-		panic(err)
-	}
-	return result
-}
-
 var (
 	//go:embed testmessages/request.http
 	testRequestBytes string
@@ -39,11 +32,19 @@ var (
 )
 
 func getResponse() *http.Response {
-	return must(http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest))
+	resp, err := http.ReadResponse(bufio.NewReader(strings.NewReader(testResponseBytes)), testRequest)
+	if err != nil {
+		panic(err)
+	}
+	return resp
 }
 
 func getRequest() *http.Request {
-	return must(http.ReadRequest(bufio.NewReader(strings.NewReader(testRequestBytes))))
+	req, err := http.ReadRequest(bufio.NewReader(strings.NewReader(testRequestBytes)))
+	if err != nil {
+		panic(err)
+	}
+	return req
 }
 
 func timeFromUnix(unixSecs int64) func() time.Time {
@@ -233,7 +234,7 @@ func BenchmarkHmacSha256Sign(b *testing.B) {
 		if err != nil {
 			b.FailNow()
 		}
-		testRequest := must(http.ReadRequest(bufio.NewReader(strings.NewReader(testRequestBytes))))
+		testRequest := getRequest()
 		req := http.Request{}
 
 		b.ReportAllocs()

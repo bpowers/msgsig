@@ -223,13 +223,11 @@ func NewVerifier(algFinder func(ctx context.Context, keyName string) (VerifyingA
 		sigBufferPool: safepool.NewBufferPool(func() *bytes.Buffer {
 			return bytes.NewBuffer(make([]byte, 0, 16*1024))
 		}),
-		b64BufferPool: safepool.NewPool(func() *[]byte {
-			b := make([]byte, 0, 256)
-			return &b
+		b64BufferPool: safepool.NewByteSlicePool(func() []byte {
+			return make([]byte, 0, 256)
 		}),
-		componentsBufferPool: safepool.NewPool(func() *[]string {
-			s := make([]string, 0, 128)
-			return &s
+		componentsBufferPool: safepool.NewStringSlicePool(func() []string {
+			return make([]string, 0, 128)
 		}),
 	}, nil
 }
@@ -239,8 +237,8 @@ type verifier struct {
 	opts      sigOptions
 
 	sigBufferPool        *safepool.BufferPool
-	b64BufferPool        *safepool.Pool[*[]byte]
-	componentsBufferPool *safepool.Pool[*[]string]
+	b64BufferPool        *safepool.ByteSlicePool
+	componentsBufferPool *safepool.StringSlicePool
 }
 
 const (
@@ -494,9 +492,8 @@ func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
 		sigBufferPool: safepool.NewBufferPool(func() *bytes.Buffer {
 			return bytes.NewBuffer(make([]byte, 0, 16*1024))
 		}),
-		b64BufferPool: safepool.NewPool(func() *[]byte {
-			b := make([]byte, 0, 256)
-			return &b
+		b64BufferPool: safepool.NewByteSlicePool(func() []byte {
+			return make([]byte, 0, 256)
 		}),
 	}
 	for _, opt := range opts {
@@ -510,7 +507,7 @@ type signer struct {
 	opts sigOptions
 
 	sigBufferPool *safepool.BufferPool
-	b64BufferPool *safepool.Pool[*[]byte]
+	b64BufferPool *safepool.ByteSlicePool
 }
 
 type sigOptions struct {

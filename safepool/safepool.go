@@ -9,25 +9,68 @@ import (
 	"sync"
 )
 
-type Pool[T any] struct {
+func zeroByteSlice(s *[]byte) {
+	// get a reference to the full backing array of the slice
+	full := (*s)[:cap(*s)]
+	for i := 0; i < len(full); i++ {
+		full[i] = 0
+	}
+	*s = full[:0]
+}
+
+type ByteSlicePool struct {
 	p sync.Pool
 }
 
-func NewPool[T any](newFn func() T) *Pool[T] {
-	return &Pool[T]{
+func NewByteSlicePool(newFn func() []byte) *ByteSlicePool {
+	return &ByteSlicePool{
 		p: sync.Pool{
 			New: func() interface{} {
-				return newFn()
+				s := newFn()
+				return &s
 			},
 		},
 	}
 }
 
-func (p *Pool[T]) Get() T {
-	return p.p.Get().(T)
+func (p *ByteSlicePool) Get() *[]byte {
+	return p.p.Get().(*[]byte)
 }
 
-func (p *Pool[T]) Put(item T) {
+func (p *ByteSlicePool) Put(item *[]byte) {
+	zeroByteSlice(item)
+	p.p.Put(item)
+}
+
+func zeroStringSlice(s *[]string) {
+	// get a reference to the full backing array of the slice
+	full := (*s)[:cap(*s)]
+	for i := 0; i < len(full); i++ {
+		full[i] = ""
+	}
+}
+
+type StringSlicePool struct {
+	p sync.Pool
+}
+
+func NewStringSlicePool(newFn func() []string) *StringSlicePool {
+	return &StringSlicePool{
+		p: sync.Pool{
+			New: func() interface{} {
+				s := newFn()
+				return &s
+			},
+		},
+	}
+}
+
+func (p *StringSlicePool) Get() *[]string {
+	return p.p.Get().(*[]string)
+}
+
+func (p *StringSlicePool) Put(item *[]string) {
+	zeroStringSlice(item)
 	p.p.Put(item)
 }
 

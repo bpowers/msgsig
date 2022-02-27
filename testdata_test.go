@@ -138,28 +138,57 @@ var (
 
 const testKeySharedSecretName = "test-shared-secret"
 
-var testKeySharedSecret = must(base64.StdEncoding.DecodeString(`uzvJfB4u3N0Jy4T7NZ75MDVcr8zSTInedJtkgcu46YW4XByzNJjxBdtjUkdJPBtbmHhIDi6pcl8jsasjlTMtDQ==`))
+var testKeySharedSecret = mustBytes(base64.StdEncoding.DecodeString(`uzvJfB4u3N0Jy4T7NZ75MDVcr8zSTInedJtkgcu46YW4XByzNJjxBdtjUkdJPBtbmHhIDi6pcl8jsasjlTMtDQ==`))
 
 var (
 	testDecryptionKeys map[string]interface{}
 	testEncryptionKeys map[string]interface{}
 )
 
-func decodeAndParse[T any](s string, decoder func(b []byte) (T, error)) T {
-	p, _ := pem.Decode([]byte(s))
-	return must(decoder(p.Bytes))
+func mustBytes(bytes []byte, err error) []byte {
+	if err != nil {
+		panic(err)
+	}
+	return bytes
+}
+
+func mustDecode(key string) []byte {
+	decoded, _ := pem.Decode([]byte(key))
+	return decoded.Bytes
 }
 
 func init() {
-	testKeyRsaPrivate = decodeAndParse(testKeyRsaPrivatePem, x509.ParsePKCS1PrivateKey)
-	testKeyRsaPublic = decodeAndParse(testKeyRsaPublicPem, x509.ParsePKCS1PublicKey)
+	var err error
+	if testKeyRsaPrivate, err = x509.ParsePKCS1PrivateKey(mustDecode(testKeyRsaPrivatePem)); err != nil {
+		panic(err)
+	}
+	if testKeyRsaPublic, err = x509.ParsePKCS1PublicKey(mustDecode(testKeyRsaPublicPem)); err != nil {
+		panic(err)
+	}
 	// testKeyRsaPssPrivate = decodeAndParse(testKeyRsaPssPrivatePem, x509.ParsePKCS8PrivateKey).(*rsa.PrivateKey)
-	testKeyRsaPssPublic = decodeAndParse(testKeyRsaPssPublicPem, x509.ParsePKIXPublicKey).(*rsa.PublicKey)
-	testKeyEccP256Private = decodeAndParse(testKeyEccP256PrivatePem, x509.ParseECPrivateKey)
-	testKeyEccP256Public = decodeAndParse(testKeyEccP256PublicPem, x509.ParsePKIXPublicKey).(*ecdsa.PublicKey)
-
-	testKeyEd25519Private = decodeAndParse(testKeyEd25519PrivatePem, x509.ParsePKCS8PrivateKey).(ed25519.PrivateKey)
-	testKeyEd25519Public = decodeAndParse(testKeyEd25519PublicPem, x509.ParsePKIXPublicKey).(ed25519.PublicKey)
+	if testKeyRsaPssPublicI, err := x509.ParsePKIXPublicKey(mustDecode(testKeyRsaPssPublicPem)); err == nil {
+		testKeyRsaPssPublic = testKeyRsaPssPublicI.(*rsa.PublicKey)
+	} else {
+		panic(err)
+	}
+	if testKeyEccP256Private, err = x509.ParseECPrivateKey(mustDecode(testKeyEccP256PrivatePem)); err != nil {
+		panic(err)
+	}
+	if testKeyEccP256PublicI, err := x509.ParsePKIXPublicKey(mustDecode(testKeyEccP256PublicPem)); err == nil {
+		testKeyEccP256Public = testKeyEccP256PublicI.(*ecdsa.PublicKey)
+	} else {
+		panic(err)
+	}
+	if testKeyEd25519PrivateI, err := x509.ParsePKCS8PrivateKey(mustDecode(testKeyEd25519PrivatePem)); err == nil {
+		testKeyEd25519Private = testKeyEd25519PrivateI.(ed25519.PrivateKey)
+	} else {
+		panic(err)
+	}
+	if testKeyEd25519PublicI, err := x509.ParsePKIXPublicKey(mustDecode(testKeyEd25519PublicPem)); err == nil {
+		testKeyEd25519Public = testKeyEd25519PublicI.(ed25519.PublicKey)
+	} else {
+		panic(err)
+	}
 
 	testDecryptionKeys = map[string]interface{}{
 		testKeyRsaName:          testKeyRsaPublic,
