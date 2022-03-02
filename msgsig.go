@@ -16,7 +16,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -314,7 +313,7 @@ func getCreated(params string) (created time.Time, hasCreated bool, err error) {
 	return time.Time{}, false, nil
 }
 
-func verifyDigest(req reqResp, body io.Reader) (err error) {
+func verifyDigest(req reqResp, body []byte) (err error) {
 	for _, hdr := range req.Headers().Values(DigestHeaderName) {
 		var first, rest string
 		for first = hdr; first != ""; first = rest {
@@ -336,13 +335,9 @@ func verifyDigest(req reqResp, body io.Reader) (err error) {
 			}
 
 			digest := sha256.New()
-			bytesRead, err := io.Copy(digest, body)
-			if err != nil {
+			if _, err := digest.Write(body); err != nil {
 				return err
 			}
-
-			// TODO: should we compare this to content length?
-			_ = bytesRead
 
 			actualDigest := digest.Sum(nil)
 
@@ -362,7 +357,7 @@ func verifyDigest(req reqResp, body io.Reader) (err error) {
 	return err
 }
 
-func (v *verifier) verify(ctx context.Context, req reqResp, body io.Reader) error {
+func (v *verifier) verify(ctx context.Context, req reqResp, body []byte) error {
 	sigInput := v.sigBufferPool.Get()
 	sigInputHeader := v.sigBufferPool.Get()
 	coveredComponentsPtr := v.componentsBufferPool.Get()
@@ -465,12 +460,12 @@ func (v *verifier) verify(ctx context.Context, req reqResp, body io.Reader) erro
 	return ErrorMissingSig
 }
 
-func (v *verifier) Verify(req *http.Request) error {
-	return v.verify(req.Context(), (*httpRequest)(req), req.Body)
+func (v *verifier) Verify(req *http.Request, body []byte) error {
+	return v.verify(req.Context(), (*httpRequest)(req), body)
 }
 
-func (v *verifier) VerifyResponse(ctx context.Context, resp *http.Response) error {
-	return v.verify(ctx, (*httpResponse)(resp), resp.Body)
+func (v *verifier) VerifyResponse(ctx context.Context, resp *http.Response, body []byte) error {
+	return v.verify(ctx, (*httpResponse)(resp), body)
 }
 
 func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
@@ -705,6 +700,6 @@ type Signer interface {
 }
 
 type Verifier interface {
-	Verify(req *http.Request) error
-	VerifyResponse(ctx context.Context, resp *http.Response) error
+	Verify(req *http.Request, body []byte) error
+	VerifyResponse(ctx context.Context, resp *http.Response, body []byte) error
 }

@@ -6,7 +6,6 @@ package msgsig
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -111,6 +110,9 @@ func TestEcdsaP256Sha256SigSigning(t *testing.T) {
 	require.NoError(t, err)
 	signer, err := NewSigner(alg, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"), WithAlg(false))
 	resp := *getResponse()
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
 
 	err = signer.SignResponse(context.Background(), &resp)
 	require.NoError(t, err)
@@ -134,7 +136,7 @@ func TestEcdsaP256Sha256SigSigning(t *testing.T) {
 	verifier, err := NewVerifier(keyFinder, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"))
 	require.NoError(t, err)
 
-	err = verifier.VerifyResponse(context.Background(), &resp)
+	err = verifier.VerifyResponse(context.Background(), &resp, body)
 	require.NoError(t, err)
 }
 
@@ -142,6 +144,10 @@ func TestEcdsaP256Sha256SigSpecCase(t *testing.T) {
 	resp := *getResponse()
 	resp.Header["Signature-Input"] = []string{expectedTestSignatureEcdsaP256Sha256Input}
 	resp.Header["Signature"] = []string{expectedTestSignatureEcdsaP256Sha256}
+
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
 
 	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
 	require.NoError(t, err)
@@ -155,12 +161,15 @@ func TestEcdsaP256Sha256SigSpecCase(t *testing.T) {
 	verifier, err := NewVerifier(keyFinder, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"))
 	require.NoError(t, err)
 
-	err = verifier.VerifyResponse(context.Background(), &resp)
+	err = verifier.VerifyResponse(context.Background(), &resp, body)
 	require.NoError(t, err)
 }
 
 func TestEd25519SigSigning(t *testing.T) {
 	req := getRequest()
+	defer req.Body.Close()
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
 
 	alg, err := NewAsymmetricSigningAlgorithm(AlgorithmEd25519, testKeyEd25519Private, testKeyEd25519Name)
 	require.NoError(t, err)
@@ -198,7 +207,7 @@ func TestEd25519SigSigning(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	err = verifier.Verify(req)
+	err = verifier.Verify(req, body)
 	require.NoError(t, err)
 }
 
@@ -206,6 +215,9 @@ func TestEd25519SigSpecCase(t *testing.T) {
 	req := getRequest()
 	req.Header["Signature-Input"] = []string{expectedTestSignatureEd25519Input}
 	req.Header["Signature"] = []string{expectedTestSignatureEd25519}
+	defer req.Body.Close()
+	body, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
 
 	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEd25519, testKeyEd25519Public, testKeyEd25519Name)
 	require.NoError(t, err)
@@ -219,7 +231,7 @@ func TestEd25519SigSpecCase(t *testing.T) {
 	verifier, err := NewVerifier(keyFinder, withTime(timeFromUnix(1618884475)), WithNonce(false), WithCoveredComponents("content-type", "digest", "content-length"))
 	require.NoError(t, err)
 
-	err = verifier.Verify(req)
+	err = verifier.Verify(req, body)
 	require.NoError(t, err)
 }
 
@@ -341,9 +353,8 @@ func BenchmarkEcdsaP256Sha256Verify(b *testing.B) {
 
 		for pb.Next() {
 			resp = *testResponse
-			resp.Body = io.NopCloser(bytes.NewBuffer(testResponseBody))
 
-			err = verifier.VerifyResponse(context.Background(), &resp)
+			err = verifier.VerifyResponse(context.Background(), &resp, testResponseBody)
 			if err != nil {
 				b.FailNow()
 			}
@@ -400,9 +411,8 @@ func BenchmarkEcdsaP256Sha256VerifyLargeBody(b *testing.B) {
 
 		for pb.Next() {
 			resp = *testResponse
-			resp.Body = io.NopCloser(bytes.NewBuffer(testResponseBody))
 
-			err = verifier.VerifyResponse(context.Background(), &resp)
+			err = verifier.VerifyResponse(context.Background(), &resp, testResponseBody)
 			if err != nil {
 				require.NoError(b, err)
 				b.FailNow()
@@ -451,9 +461,8 @@ func BenchmarkEd25519Verify(b *testing.B) {
 
 		for pb.Next() {
 			resp = *testResponse
-			resp.Body = io.NopCloser(bytes.NewBuffer(testResponseBody))
 
-			err = verifier.VerifyResponse(context.Background(), &resp)
+			err = verifier.VerifyResponse(context.Background(), &resp, testResponseBody)
 			if err != nil {
 				b.FailNow()
 			}
