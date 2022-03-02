@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bpowers/msgsig/internal/stringsutil"
+
 	"github.com/bpowers/msgsig/safepool"
 )
 
@@ -319,9 +321,9 @@ func verifyDigest(req reqResp, body io.Reader) (err error) {
 	for _, hdr := range req.Headers().Values(DigestHeaderName) {
 		var first, rest string
 		for first = hdr; first != ""; first = rest {
-			first, rest, _ = strings.Cut(hdr, ",")
+			first, rest, _ = stringsutil.Cut(hdr, ',')
 
-			digestAlg, digestVal, found := strings.Cut(first, "=")
+			digestAlg, digestVal, found := stringsutil.Cut(first, '=')
 			if !found {
 				continue
 			}
@@ -376,9 +378,9 @@ func (v *verifier) verify(ctx context.Context, req reqResp, body io.Reader) erro
 	for _, hdr := range req.Headers().Values(SignatureInputHeaderName) {
 		var first, rest string
 		for first = hdr; first != ""; first = rest {
-			first, rest, _ = strings.Cut(hdr, ",")
+			first, rest, _ = stringsutil.Cut(hdr, ',')
 
-			sigId, params, found := strings.Cut(first, "=")
+			sigId, params, found := stringsutil.Cut(first, '=')
 			if !found {
 				// TODO: should we continue here?
 				return ErrorMalformedSigParams
