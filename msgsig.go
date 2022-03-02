@@ -45,6 +45,12 @@ var (
 	ErrorDigestVerificationFailed   = errors.New("digest verification failed")
 	ErrorInvalidSigLength           = errors.New("the base64-decoded signature has an unexpected length")
 	ErrorUnsupportedDigestAlgorithm = errors.New("a digest header was found, but it didn't contain a digest in a supported algorithm")
+	ErrorMissingSigParams           = errors.New("missing 'Signature-Params' header")
+	ErrorMissingSig                 = errors.New("missing 'Signature' header")
+	ErrorMalformedSigParams         = errors.New("malformed 'Signature-Params' header")
+	ErrorMalformedSig               = errors.New("malformed 'Signature' header")
+	ErrorVerifyFailed               = errors.New("failed to verify signature")
+	ErrorDigestMismatch             = errors.New("failed to verify content hash in 'Digest' header")
 )
 
 type SigningAlgorithm interface {
@@ -247,15 +253,6 @@ const (
 	SignatureInputHeaderName = "Signature-Input"
 	SignatureHeaderName      = "Signature"
 	DigestHeaderName         = "Digest"
-)
-
-var (
-	ErrorMissingSigParams   = errors.New("missing 'Signature-Params' header")
-	ErrorMissingSig         = errors.New("missing 'Signature' header")
-	ErrorMalformedSigParams = errors.New("malformed 'Signature-Params' header")
-	ErrorMalformedSig       = errors.New("malformed 'Signature' header")
-	ErrorVerifyFailed       = errors.New("failed to verify signature")
-	ErrorDigestMismatch     = errors.New("failed to verify content hash in 'Digest' header")
 )
 
 func parseComponents(buf []string, in string) (components []string, ok bool) {
@@ -526,6 +523,19 @@ type sigOptions struct {
 	sigNamer           func(r reqResp) []byte
 }
 
+func appendValueStringQuoted(buf *bytes.Buffer, v string) {
+	buf.WriteByte('"')
+	buf.WriteString(v)
+	buf.WriteByte('"')
+}
+
+func appendKeyValueString(buf *bytes.Buffer, k, v string) {
+	buf.WriteByte(';')
+	buf.WriteString(k)
+	buf.WriteByte('=')
+	appendValueStringQuoted(buf, v)
+}
+
 func buildInput(s sigOptions, getComponent func(c string) string, sigInput, sigInputHeader *bytes.Buffer) error {
 	sigInputHeader.WriteString("(")
 
@@ -536,12 +546,9 @@ func buildInput(s sigOptions, getComponent func(c string) string, sigInput, sigI
 			if i > 0 {
 				sigInputHeader.WriteByte(' ')
 			}
-			sigInputHeader.WriteByte('"')
-			sigInputHeader.WriteString(c)
-			sigInputHeader.WriteByte('"')
-			sigInput.WriteByte('"')
-			sigInput.WriteString(c)
-			sigInput.WriteString(`": `)
+			appendValueStringQuoted(sigInputHeader, c)
+			appendValueStringQuoted(sigInput, c)
+			sigInput.WriteString(`: `)
 			sigInput.WriteString(getComponent(c))
 			sigInput.WriteByte('\n')
 		}
@@ -555,14 +562,10 @@ func buildInput(s sigOptions, getComponent func(c string) string, sigInput, sigI
 		sigInputHeader.Write(i)
 	}
 
-	sigInputHeader.WriteString(`;keyid="`)
-	sigInputHeader.WriteString(s.keyId)
-	sigInputHeader.WriteByte('"')
+	appendKeyValueString(sigInputHeader, "keyid", s.keyId)
 
 	if s.hasAlg {
-		sigInputHeader.WriteString(`;alg="`)
-		sigInputHeader.WriteString(string(s.algName))
-		sigInputHeader.WriteByte('"')
+		appendKeyValueString(sigInputHeader, "alg", string(s.algName))
 	}
 
 	sigInput.WriteString(`"@signature-params": `)
