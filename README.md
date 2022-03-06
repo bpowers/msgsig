@@ -1,5 +1,5 @@
-msgsig: HTTP Message Signatures
-===============================
+msgsig: HTTP Message Signatures for Go
+======================================
 
 This package implements v09 of the [HTTP Message Signatures](https://httpwg.org/http-extensions/draft-ietf-httpbis-message-signatures.html) draft specification.
 It will be updated for future revisions of the spec.
