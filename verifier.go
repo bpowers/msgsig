@@ -10,14 +10,12 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
-	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -52,75 +50,10 @@ var (
 	ErrorDigestMismatch             = errors.New("failed to verify content hash in 'Digest' header")
 )
 
-type SigningAlgorithm interface {
-	KeyId() string
-	AlgName() AlgorithmName
-	Sign(input []byte) ([]byte, error)
-}
-
 type VerifyingAlgorithm interface {
 	KeyId() string
 	AlgName() AlgorithmName
 	Verify(input, sig []byte) (bool, error)
-}
-
-func NewAsymmetricSigningAlgorithm(algName AlgorithmName, privKey crypto.Signer, keyId string) (SigningAlgorithm, error) {
-	if keyId = strings.TrimSpace(keyId); keyId == "" {
-		return nil, ErrorEmptyKeyId
-	}
-
-	var hashOpt crypto.Hash
-	switch algName {
-	case AlgorithmRsaPssSha512:
-		if _, ok := privKey.(*rsa.PrivateKey); !ok {
-			return nil, ErrorAlgorithmKeyMismatch
-		}
-		hashOpt = crypto.SHA512
-		if rsaKey, ok := privKey.(*rsa.PrivateKey); ok {
-			return &rsaPssSigningAlgorithm{
-				keyId:   keyId,
-				privKey: rsaKey,
-				hashOpt: hashOpt,
-				hash:    hashOpt.New(),
-			}, nil
-		} else {
-			return nil, ErrorAlgorithmKeyMismatch
-		}
-	case AlgorithmRsaV15Sha256:
-		if _, ok := privKey.(*rsa.PrivateKey); !ok {
-			return nil, ErrorAlgorithmKeyMismatch
-		}
-		hashOpt = crypto.SHA256
-		return &rsaV15SigningAlgorithm{
-			algName: algName,
-			keyId:   keyId,
-			privKey: privKey,
-			hashOpt: hashOpt,
-			hash:    hashOpt.New(),
-		}, nil
-	case AlgorithmEcdsaP256Sha256:
-		hashOpt = crypto.SHA256
-		if ecdsaPrivKey, ok := privKey.(*ecdsa.PrivateKey); ok {
-			return &ecdsaSigningAlgorithm{
-				algName: algName,
-				keyId:   keyId,
-				privKey: ecdsaPrivKey,
-				hashOpt: hashOpt,
-				hash:    hashOpt.New(),
-			}, nil
-		} else {
-			return nil, ErrorAlgorithmKeyMismatch
-		}
-	case AlgorithmEd25519:
-		if ed25519PrivKey, ok := privKey.(ed25519.PrivateKey); ok {
-			return &ed25519SigningAlgorithm{
-				algName: algName,
-				keyId:   keyId,
-				privKey: ed25519PrivKey,
-			}, nil
-		}
-	}
-	return nil, ErrorUnknownAlgorithm
 }
 
 func NewAsymmetricVerifyingAlgorithm(algName AlgorithmName, pubKey crypto.PublicKey, keyId string) (VerifyingAlgorithm, error) {
@@ -155,67 +88,6 @@ func NewAsymmetricVerifyingAlgorithm(algName AlgorithmName, pubKey crypto.Public
 
 	return nil, ErrorUnknownAlgorithm
 }
-
-type SignerOption func(options *sigOptions)
-
-func WithSigNamer(namer func() string) func(s *sigOptions) {
-	return func(s *sigOptions) {
-		s.sigNamer = func(_ reqResp) []byte {
-			return []byte(namer())
-		}
-	}
-}
-
-// WithCreated ensures that signatures created by a Signer with this option set have a created signature parameter.
-func WithCreated(b bool) func(s *sigOptions) {
-	return func(s *sigOptions) {
-		s.hasCreated = b
-	}
-}
-
-func WithMaxAge(duration time.Duration) func(s *sigOptions) {
-	return func(s *sigOptions) {
-		s.hasMaxAge = true
-		s.maxAge = duration
-	}
-}
-
-func WithCoveredComponents(components ...string) func(s *sigOptions) {
-	return func(s *sigOptions) {
-		s.coverAllComponents = false
-		s.coveredComponents = components
-	}
-}
-
-func WithNoCoveredComponents() func(s *sigOptions) {
-	return func(s *sigOptions) {
-		s.coverAllComponents = false
-	}
-}
-
-func WithNonce(nonce bool) func(s *sigOptions) {
-	return func(s *sigOptions) {
-		s.hasNonce = nonce
-	}
-}
-
-func WithAlg(alg bool) func(s *sigOptions) {
-	return func(s *sigOptions) {
-		s.hasAlg = alg
-	}
-}
-
-func withTime(now func() time.Time) func(s *sigOptions) {
-	return func(s *sigOptions) {
-		s.created = now
-	}
-}
-
-func now() time.Time {
-	return time.Now()
-}
-
-var defaultSigName = []byte("sig1")
 
 func NewVerifier(algFinder func(ctx context.Context, keyName string) (VerifyingAlgorithm, bool), opts ...SignerOption) (Verifier, error) {
 	return &verifier{
@@ -272,15 +144,6 @@ func parseComponents(buf []string, in string) (components []string, ok bool) {
 		}
 	}
 	return components, true
-}
-
-func contains(slice []string, s string) bool {
-	for _, ss := range slice {
-		if ss == s {
-			return true
-		}
-	}
-	return false
 }
 
 func getKeyId(params string) (keyId string, err error) {
@@ -466,237 +329,6 @@ func (v *verifier) Verify(req *http.Request, body []byte) error {
 
 func (v *verifier) VerifyResponse(ctx context.Context, resp *http.Response, body []byte) error {
 	return v.verify(ctx, (*httpResponse)(resp), body)
-}
-
-func NewSigner(alg SigningAlgorithm, opts ...SignerOption) (Signer, error) {
-	s := &signer{
-		alg: alg,
-		opts: sigOptions{
-			algName:            alg.AlgName(),
-			keyId:              alg.KeyId(),
-			hasCreated:         true,
-			created:            now,
-			hasNonce:           true,
-			hasAlg:             true,
-			coverAllComponents: true,
-			sigNamer: func(r reqResp) []byte {
-				return defaultSigName
-			},
-		},
-		sigBufferPool: safepool.NewBufferPool(func() *bytes.Buffer {
-			return bytes.NewBuffer(make([]byte, 0, 16*1024))
-		}),
-		b64BufferPool: safepool.NewByteSlicePool(func() []byte {
-			return make([]byte, 0, 256)
-		}),
-	}
-	for _, opt := range opts {
-		opt(&s.opts)
-	}
-	return s, nil
-}
-
-type signer struct {
-	alg  SigningAlgorithm
-	opts sigOptions
-
-	sigBufferPool *safepool.BufferPool
-	b64BufferPool *safepool.ByteSlicePool
-}
-
-type sigOptions struct {
-	created            func() time.Time
-	maxAge             time.Duration
-	coveredComponents  []string
-	keyId              string
-	algName            AlgorithmName
-	coverAllComponents bool
-	hasCreated         bool
-	hasNonce           bool
-	hasAlg             bool
-	hasMaxAge          bool
-	sigNamer           func(r reqResp) []byte
-}
-
-func appendValueStringQuoted(buf *bytes.Buffer, v string) {
-	buf.WriteByte('"')
-	buf.WriteString(v)
-	buf.WriteByte('"')
-}
-
-func appendKeyValueString(buf *bytes.Buffer, k, v string) {
-	buf.WriteByte(';')
-	buf.WriteString(k)
-	buf.WriteByte('=')
-	appendValueStringQuoted(buf, v)
-}
-
-func buildInput(s sigOptions, getComponent func(c string) string, sigInput, sigInputHeader *bytes.Buffer) error {
-	sigInputHeader.WriteString("(")
-
-	if s.coverAllComponents {
-		panic("TODO")
-	} else {
-		for i, c := range s.coveredComponents {
-			if i > 0 {
-				sigInputHeader.WriteByte(' ')
-			}
-			appendValueStringQuoted(sigInputHeader, c)
-			appendValueStringQuoted(sigInput, c)
-			sigInput.WriteString(`: `)
-			sigInput.WriteString(getComponent(c))
-			sigInput.WriteByte('\n')
-		}
-	}
-
-	sigInputHeader.WriteString(")")
-	if s.hasCreated {
-		var ibuf [32]byte
-		i := strconv.AppendInt(ibuf[0:0:32], s.created().Unix(), 10)
-		sigInputHeader.WriteString(";created=")
-		sigInputHeader.Write(i)
-	}
-
-	appendKeyValueString(sigInputHeader, "keyid", s.keyId)
-
-	if s.hasAlg {
-		appendKeyValueString(sigInputHeader, "alg", string(s.algName))
-	}
-
-	sigInput.WriteString(`"@signature-params": `)
-	sigInput.Write(sigInputHeader.Bytes())
-
-	return nil
-}
-
-func zero(in []byte) {
-	for i := 0; i < len(in); i++ {
-		in[i] = 0
-	}
-}
-
-type httpRequest http.Request
-type httpResponse http.Response
-
-func (r *httpRequest) Headers() http.Header {
-	return r.Header
-}
-
-func (r *httpRequest) Authority() string {
-	return r.Host
-}
-
-func (r *httpRequest) GetURL() *url.URL {
-	return r.URL
-}
-
-func (r *httpRequest) GetMethod() string {
-	return r.Method
-}
-
-func (r *httpResponse) Headers() http.Header {
-	return r.Header
-}
-
-func (r *httpResponse) GetURL() *url.URL {
-	return nil
-}
-
-func (r *httpResponse) Authority() string {
-	// TODO
-	return ""
-}
-
-func (r *httpResponse) GetMethod() string {
-	// TODO
-	return ""
-}
-
-type reqResp interface {
-	Authority() string
-	Headers() http.Header
-	GetURL() *url.URL
-	GetMethod() string
-}
-
-func getComponent(r reqResp, c string) string {
-	switch c {
-	case "@authority":
-		return r.Authority()
-	case "@path":
-		if url := r.GetURL(); url != nil {
-			return url.Path
-		}
-	case "@method":
-		return r.GetMethod()
-	default:
-		return r.Headers().Get(c)
-	}
-	return ""
-}
-
-func (s *signer) sign(ctx context.Context, req reqResp) error {
-	sigInput := s.sigBufferPool.Get()
-	sigInputHeader := s.sigBufferPool.Get()
-	headerBuf := s.sigBufferPool.Get()
-	b64Buf := s.b64BufferPool.Get()
-	defer func() {
-		s.sigBufferPool.Put(sigInput)
-		s.sigBufferPool.Put(sigInputHeader)
-		s.sigBufferPool.Put(headerBuf)
-		s.b64BufferPool.Put(b64Buf)
-	}()
-
-	if err := buildInput(s.opts, func(c string) string {
-		return getComponent(req, c)
-	}, sigInput, sigInputHeader); err != nil {
-		return err
-	}
-
-	sigName := s.opts.sigNamer(req)
-	headerBuf.Write(sigName)
-	headerBuf.WriteByte('=')
-	headerBuf.Write(sigInputHeader.Bytes())
-
-	req.Headers().Set("Signature-Input", headerBuf.String())
-
-	rawSig, err := s.alg.Sign(sigInput.Bytes())
-	if err != nil {
-		return err
-	}
-
-	headerBuf.Reset()
-	headerBuf.Write(sigName)
-	headerBuf.WriteString("=:")
-	// encode the signature bytes in base64 for the header
-	l := base64.StdEncoding.EncodedLen(len(rawSig))
-	if l > cap(*b64Buf) {
-		*b64Buf = make([]byte, 0, l)
-	}
-	b := (*b64Buf)[0:l]
-	base64.StdEncoding.Encode(b, rawSig)
-	headerBuf.Write(b)
-	headerBuf.WriteByte(':')
-
-	req.Headers().Set("Signature", headerBuf.String())
-
-	return nil
-}
-
-// Sign computes a signature over the covered components of the request and adds it to the request.
-func (s *signer) Sign(req *http.Request) error {
-	return s.sign(req.Context(), (*httpRequest)(req))
-}
-
-// SignResponse computes a signature over the covered components of the response and adds it to the request.
-func (s *signer) SignResponse(ctx context.Context, resp *http.Response) error {
-	return s.sign(ctx, (*httpResponse)(resp))
-}
-
-// Signer objects sign HTTP requests.
-type Signer interface {
-	Sign(req *http.Request) error
-	SignResponse(ctx context.Context, resp *http.Response) error
 }
 
 type Verifier interface {
