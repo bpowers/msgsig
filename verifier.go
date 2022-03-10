@@ -44,7 +44,7 @@ var (
 	ErrorMissingSig                 = errors.New("missing 'Signature' header")
 	ErrorMalformedSigInput          = errors.New("malformed 'Signature-Input' header")
 	ErrorMalformedSig               = errors.New("malformed 'Signature' header")
-	ErrorMissingSigValue            = errors.New("missing expected sig ID in 'Signature' header")
+	ErrorMissingSigParamsValue      = errors.New("missing expected params for sigid in 'Signature-Input' header")
 	ErrorVerifyFailed               = errors.New("failed to verify signature")
 	ErrorDigestMismatch             = errors.New("failed to verify content hash in 'Digest' header")
 )
@@ -219,31 +219,26 @@ func verifyDigest(req reqResp, body []byte) (err error) {
 	return err
 }
 
-func getNamedSig(headers http.Header, sigId string) (string, error) {
-	baseErr := ErrorMissingSigValue
+func getSigParams(headers http.Header, sigId string) (string, error) {
+	baseErr := ErrorMissingSigParamsValue
 
-	for _, hdr := range headers.Values(SignatureHeaderName) {
+	for _, hdr := range headers.Values(SignatureInputHeaderName) {
 		var first, rest string
 		for first = hdr; first != ""; first = rest {
 			first, rest, _ = stringsutil.Cut(hdr, ',')
 
-			sigHeader := first
-			// check that this part of the header starts with `${sigId}=` without
-			// requiring an allocation to concat an `=` onto the end of `${sigId}`
-			if !strings.HasPrefix(sigHeader, sigId) || len(sigHeader) < len(sigId)+1 || sigHeader[len(sigId)] != '=' {
+			foundSigId, params, found := stringsutil.Cut(first, '=')
+			if !found {
+				// record that it looks wrong, but then attempt to look for another signature
+				baseErr = ErrorMalformedSigInput
 				continue
 			}
 
-			// pull the signature value out from after the sigId (the spec expects
-			// it to be wrapped in ':' chars) as per
-			// https://httpwg.org/http-extensions/draft-ietf-httpbis-message-signatures.html#section-4.2
-			sig := sigHeader[len(sigId)+1:]
-			if len(sig) == 0 || sig[0] != ':' || sig[len(sig)-1] != ':' {
-				baseErr = ErrorMalformedSig
+			if sigId != foundSigId {
 				continue
 			}
-			sig = sig[1 : len(sig)-1]
-			return sig, nil
+
+			return params, nil
 		}
 	}
 
@@ -251,8 +246,11 @@ func getNamedSig(headers http.Header, sigId string) (string, error) {
 }
 
 func (v *verifier) verify(ctx context.Context, req reqResp, body []byte) error {
-	baseError := ErrorMissingSig
+	baseErr := ErrorMissingSig
 
+	headers := req.Headers()
+
+	// grab various scratch buffers from our `*sync.Pool`s
 	sigInput := v.sigBufferPool.Get()
 	sigInputHeader := v.sigBufferPool.Get()
 	coveredComponentsPtr := v.componentsBufferPool.Get()
@@ -262,36 +260,74 @@ func (v *verifier) verify(ctx context.Context, req reqResp, body []byte) error {
 		v.componentsBufferPool.Put(coveredComponentsPtr)
 	}()
 	coveredComponents := (*coveredComponentsPtr)[0:0]
-	for _, hdr := range req.Headers().Values(SignatureInputHeaderName) {
+
+	// we may see both multiple Signature HTTP headers and multiple signatures in a
+	// single header separated by a comma.  This double for-loop iterates over the
+	// set of values without requiring extra allocations.
+	//
+	// the pseudocode for the loop below is roughly:
+	//
+	//   for sig in allSignatures(req):
+	//       params = getParams(sig)
+	//       key = v.algFinder(params.keyId)
+	//       if shouldVerifyDigest(params) and not digestVerifies(req):
+	//           return false
+	//       input = buildInput(req, params)
+	//       if verifies(key, input):
+	//           return true
+	//
+	for _, hdr := range headers.Values(SignatureHeaderName) {
 		var first, rest string
 		for first = hdr; first != ""; first = rest {
 			first, rest, _ = stringsutil.Cut(hdr, ',')
 
-			sigId, params, found := stringsutil.Cut(first, '=')
+			sigId, sig, found := stringsutil.Cut(first, '=')
 			if !found {
 				// record that it looks wrong, but then attempt to look for another signature
-				baseError = ErrorMalformedSigInput
+				baseErr = ErrorMalformedSig
+				continue
+			}
+
+			// pull the signature value out from after the sigId (the spec expects
+			// it to be wrapped in ':' chars) as per
+			// https://httpwg.org/http-extensions/draft-ietf-httpbis-message-signatures.html#section-4.2
+			if len(sig) == 0 || sig[0] != ':' || sig[len(sig)-1] != ':' {
+				baseErr = ErrorMalformedSig
+				continue
+			}
+			sig = sig[1 : len(sig)-1]
+
+			// the signature is base64 encoded, so decode it
+			bsig, err := base64.StdEncoding.DecodeString(sig)
+			if err != nil {
+				return ErrorMalformedSig
+			}
+
+			// ensure we have the input parameters we need to verify this sig
+			params, err := getSigParams(headers, sigId)
+			if err != nil {
+				baseErr = err
 				continue
 			}
 
 			// basic sanity check: this needs to be non-empty, and start with the
 			// list of covered components
 			if len(params) == 0 || params[0] != '(' {
-				baseError = ErrorMalformedSigInput
+				baseErr = ErrorMalformedSigInput
 				continue
 			}
 
 			// extract the key ID from the Signature-Input params
 			keyId, err := getKeyId(params)
 			if err != nil {
-				baseError = err
+				baseErr = err
 				continue
 			}
 
 			// see if this is a key we know
 			alg, ok := v.algFinder(ctx, keyId)
 			if !ok {
-				baseError = ErrorUnknownKeyId
+				baseErr = ErrorUnknownKeyId
 				continue
 			}
 
@@ -299,15 +335,16 @@ func (v *verifier) verify(ctx context.Context, req reqResp, body []byte) error {
 			if i := strings.IndexByte(params, ')'); i >= 0 {
 				componentsStr = params[1:i]
 			} else {
-				baseError = ErrorMalformedSigInput
+				baseErr = ErrorMalformedSigInput
 				continue
 			}
 			if coveredComponents, ok = parseComponents(coveredComponents, componentsStr); !ok {
-				baseError = ErrorMalformedSigInput
+				baseErr = ErrorMalformedSigInput
 				continue
 			}
 
-			// digest here has to be lowercase, rather than the HTTP 1.1 SnakeCase
+			// digest in the set of covered components is lowercase
+			// rather than the expected HTTP SnakeCase
 			if contains(coveredComponents, "digest") {
 				if err := verifyDigest(req, body); err != nil {
 					return err
@@ -334,15 +371,6 @@ func (v *verifier) verify(ctx context.Context, req reqResp, body []byte) error {
 				return err
 			}
 
-			sig, err := getNamedSig(req.Headers(), sigId)
-			if err != nil {
-				return err
-			}
-			bsig, err := base64.StdEncoding.DecodeString(sig)
-			if err != nil {
-				return ErrorMalformedSig
-			}
-
 			ok, err = alg.Verify(sigInput.Bytes(), bsig)
 			if err != nil {
 				return err
@@ -350,12 +378,13 @@ func (v *verifier) verify(ctx context.Context, req reqResp, body []byte) error {
 			if !ok {
 				return ErrorVerifyFailed
 			}
-			// great success!
+
+			// great success! signature verification passed so return without an error
 			return nil
 		}
 	}
 
-	return baseError
+	return baseErr
 }
 
 func (v *verifier) Verify(req *http.Request, body []byte) error {
