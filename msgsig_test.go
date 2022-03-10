@@ -126,7 +126,7 @@ func TestEcdsaP256Sha256SigSigning(t *testing.T) {
 
 	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
 	require.NoError(t, err)
-	keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+	keyFinder := func(ctx context.Context, keyId string, _ http.Header) (VerifyingAlgorithm, bool) {
 		if keyId == testKeyEccP256Name {
 			return vAlg, true
 		}
@@ -151,7 +151,7 @@ func TestEcdsaP256Sha256SigSpecCase(t *testing.T) {
 
 	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
 	require.NoError(t, err)
-	keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+	keyFinder := func(ctx context.Context, keyId string, _ http.Header) (VerifyingAlgorithm, bool) {
 		if keyId == testKeyEccP256Name {
 			return vAlg, true
 		}
@@ -193,7 +193,7 @@ func TestEd25519SigSigning(t *testing.T) {
 
 	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEd25519, testKeyEd25519Public, testKeyEd25519Name)
 	require.NoError(t, err)
-	keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+	keyFinder := func(ctx context.Context, keyId string, _ http.Header) (VerifyingAlgorithm, bool) {
 		if keyId == testKeyEd25519Name {
 			return vAlg, true
 		}
@@ -221,7 +221,7 @@ func TestEd25519SigSpecCase(t *testing.T) {
 
 	vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEd25519, testKeyEd25519Public, testKeyEd25519Name)
 	require.NoError(t, err)
-	keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+	keyFinder := func(ctx context.Context, keyId string, _ http.Header) (VerifyingAlgorithm, bool) {
 		if keyId == testKeyEd25519Name {
 			return vAlg, true
 		}
@@ -338,7 +338,7 @@ func BenchmarkEcdsaP256Sha256Verify(b *testing.B) {
 
 		vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
 		require.NoError(b, err)
-		keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+		keyFinder := func(ctx context.Context, keyId string, _ http.Header) (VerifyingAlgorithm, bool) {
 			if keyId == testKeyEccP256Name {
 				return vAlg, true
 			}
@@ -396,7 +396,7 @@ func BenchmarkEcdsaP256Sha256VerifyLargeBody(b *testing.B) {
 
 		vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEcdsaP256Sha256, testKeyEccP256Public, testKeyEccP256Name)
 		require.NoError(b, err)
-		keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+		keyFinder := func(ctx context.Context, keyId string, _ http.Header) (VerifyingAlgorithm, bool) {
 			if keyId == testKeyEccP256Name {
 				return vAlg, true
 			}
@@ -446,7 +446,7 @@ func BenchmarkEd25519Verify(b *testing.B) {
 
 		vAlg, err := NewAsymmetricVerifyingAlgorithm(AlgorithmEd25519, testKeyEd25519Public, testKeyEd25519Name)
 		require.NoError(b, err)
-		keyFinder := func(ctx context.Context, keyId string) (VerifyingAlgorithm, bool) {
+		keyFinder := func(ctx context.Context, keyId string, _ http.Header) (VerifyingAlgorithm, bool) {
 			if keyId == testKeyEd25519Name {
 				return vAlg, true
 			}

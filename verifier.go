@@ -88,7 +88,11 @@ func NewAsymmetricVerifyingAlgorithm(algName AlgorithmName, pubKey crypto.Public
 	return nil, ErrorUnknownAlgorithm
 }
 
-func NewVerifier(algFinder func(ctx context.Context, keyName string) (VerifyingAlgorithm, bool), opts ...SignerOption) (Verifier, error) {
+// NewVerifier creates a Verifier instance to verify HTTP Message Signatures and is safe for concurrent use from
+// multiple goroutines.  It is intended that you create a single Verifier instance and reuse it across messages.
+// The algFinder parameter is called by the Verifier to find a public key to verify the request with - the
+// header parameter to algFinder MUST NOT be modified.
+func NewVerifier(algFinder func(ctx context.Context, keyName string, headers http.Header) (VerifyingAlgorithm, bool), opts ...SignerOption) (Verifier, error) {
 	return &verifier{
 		algFinder: algFinder,
 		opts: sigOptions{
@@ -111,7 +115,7 @@ func NewVerifier(algFinder func(ctx context.Context, keyName string) (VerifyingA
 }
 
 type verifier struct {
-	algFinder func(ctx context.Context, keyName string) (VerifyingAlgorithm, bool)
+	algFinder func(ctx context.Context, keyName string, headers http.Header) (VerifyingAlgorithm, bool)
 	opts      sigOptions
 
 	sigBufferPool        *safepool.BufferPool
@@ -325,7 +329,7 @@ func (v *verifier) verify(ctx context.Context, req reqResp, body []byte) error {
 			}
 
 			// see if this is a key we know
-			alg, ok := v.algFinder(ctx, keyId)
+			alg, ok := v.algFinder(ctx, keyId, headers)
 			if !ok {
 				baseErr = ErrorUnknownKeyId
 				continue
