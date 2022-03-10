@@ -129,6 +129,10 @@ const (
 	DigestHeaderName         = "Digest"
 )
 
+// parseComponents takes a string of form `"a", "b", "c"` and returns a slice
+// like []string{"a", "b", "c"} (where the strings do not contain double quotes).
+// The buf param can be nil, or a pre-allocated slice to avoid allocating here in
+// the common case.
 func parseComponents(buf []string, in string) (components []string, ok bool) {
 	components = buf[:0]
 
@@ -146,6 +150,7 @@ func parseComponents(buf []string, in string) (components []string, ok bool) {
 			return nil, false
 		}
 	}
+
 	return components, true
 }
 
@@ -153,7 +158,7 @@ func getKeyId(params string) (keyId string, err error) {
 	const keyIdStart = `;keyid="`
 	if i := strings.Index(params, keyIdStart); i >= 0 {
 		i += len(keyIdStart)
-		if j := strings.Index(params[i:], `"`); j >= 0 {
+		if j := strings.IndexByte(params[i:], '"'); j >= 0 {
 			keyId = params[i : i+j]
 		} else {
 			return "", ErrorMalformedSigInput
@@ -179,6 +184,7 @@ func getCreated(params string) (created time.Time, hasCreated bool, err error) {
 	return time.Time{}, false, nil
 }
 
+// verifyDigest returns nil if the hash in the Digest header matches the body.
 func verifyDigest(req reqResp, body []byte) (err error) {
 	for _, hdr := range req.Headers().Values(DigestHeaderName) {
 		var first, rest string
@@ -216,6 +222,7 @@ func verifyDigest(req reqResp, body []byte) (err error) {
 
 	}
 
+	// if we haven't returned from within the for loop above, it is an error.
 	if err == nil {
 		err = ErrorDigestMismatch
 	}
@@ -223,6 +230,8 @@ func verifyDigest(req reqResp, body []byte) (err error) {
 	return err
 }
 
+// getSigParams returns the input parameters for a given sigId if they are
+// found in the headers or an error.
 func getSigParams(headers http.Header, sigId string) (string, error) {
 	baseErr := ErrorMissingSigParamsValue
 
@@ -249,6 +258,7 @@ func getSigParams(headers http.Header, sigId string) (string, error) {
 	return "", baseErr
 }
 
+// verify returns nil if an HTTP Message Signature attached to the request verifies successfully.
 func (v *verifier) verify(ctx context.Context, req reqResp, body []byte) error {
 	baseErr := ErrorMissingSig
 
