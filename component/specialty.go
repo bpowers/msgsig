@@ -6,6 +6,9 @@
 package component
 
 const (
+	// SignatureParams is REQUIRED as part of the signature base (Section 2.3)
+	// but the component identifier MUST NOT be enumerated within the set of
+	// covered components itself.
 	SignatureParams = "@signature-params"
 	Method          = "@method"
 	TargetUri       = "@target-uri"
